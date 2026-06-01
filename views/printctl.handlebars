@@ -65,7 +65,7 @@
         <th>Partage</th>
         <th>Port / IP</th>
         <th>Modèle</th>
-        <th>Consommables</th>
+        <th>Statut</th>
         <th>Localisation</th>
         <th>Jobs</th>
       </tr>
@@ -115,8 +115,6 @@
   var modelState = {};
   // "host|PrinterShortName" -> live job count from WMI (overrides rpcclient cjobs).
   var jobCountState = {};
-  // ip -> array of {desc,type,level,max,percent} once we've SNMP-walked the supplies.
-  var suppliesState = {};
   // ip -> {state: "prête"|"imprime"|…, errors: ["bourrage", "papier bas", …]}
   var statusState = {};
   // Periodic background refresh for the job-count column.
@@ -130,49 +128,25 @@
     return 'unknown';
   }
 
-  // Recognise K/C/M/Y from the description so we display "K 32%" instead of
-  // "Black Toner Cartridge 32%". Falls back to a trimmed label for exotic supplies.
-  function colorLetter(desc) {
-    var d = (desc || '').toLowerCase();
-    if (/\b(black|noir|schwarz|negro|preto)\b/.test(d) || /\bbk\b/.test(d)) return 'K';
-    if (/\b(cyan)\b/.test(d) || /\bc\b/.test(d)) return 'C';
-    if (/\b(magenta)\b/.test(d) || /\bm\b/.test(d)) return 'M';
-    if (/\b(yellow|jaune|gelb|amarillo|amarelo)\b/.test(d) || /\by\b/.test(d)) return 'Y';
-    return null;
-  }
-  function shortSupply(desc, type) {
-    var c = colorLetter(desc);
-    if (c) return c;
-    if (type && type !== 'autre' && type !== 'inconnu') return type.charAt(0).toUpperCase() + type.slice(1);
-    var s = (desc || '').replace(/\s+/g, ' ').trim();
-    return s.length > 14 ? s.slice(0, 14) + '…' : s;
-  }
-
-  // Keep only the consumables that actually run out and matter day-to-day:
-  // toners, inks. Hide drums, fusers, waste, etc. (they have their own lifecycle
-  // and aren't "out of supply" in the urgent sense).
-  function isPrimarySupply(s) {
-    return s.type === 'toner' || s.type === 'encre' || s.type === 'cart. encre';
-  }
-
-  function suppliesHtml(ip, alive) {
+  // What goes in the "Statut" column. We surface, in this order:
+  //   - SNMP-reported errors (jam, no paper, cover open, …)  → red chips
+  //   - Activity state (printing, warming up)                 → yellow chip
+  //   - "OK" (or "Prête")                                     → green chip
+  //   - "…" while the status query is still in flight
+  function statusHtml(ip, alive) {
     if (!ip) return '<span class="empty">—</span>';
     if (alive === false) return '<span class="empty">—</span>';
-    var supplies = suppliesState[ip];
-    if (supplies === undefined) return '<span class="empty">…</span>';
-    if (!supplies.length) return '<span class="empty">N/A</span>';
-    var primary = supplies.filter(isPrimarySupply);
-    var shown = primary.length ? primary : supplies;
-    return shown.map(function (s) {
-      var label = shortSupply(s.desc, s.type);
-      var cls = 'na';
-      if (s.percent != null) {
-        label += ' ' + s.percent + '%';
-        cls = s.percent <= 10 ? 'bad' : s.percent <= 25 ? 'warn' : 'ok';
-      }
-      var tip = s.desc + ' (' + s.type + ')' + (s.percent != null ? ' — ' + s.percent + '%' : '');
-      return '<span class="chip ' + cls + '" title="' + escapeHtml(tip) + '">' + escapeHtml(label) + '</span>';
-    }).join('');
+    var s = statusState[ip];
+    if (s === undefined) return '<span class="empty">…</span>';
+    if (s.errors && s.errors.length) {
+      return s.errors.map(function (e) {
+        return '<span class="chip bad">⚠ ' + escapeHtml(e) + '</span>';
+      }).join('');
+    }
+    if (s.state && s.state !== 'prête' && s.state !== 'autre' && s.state !== 'inconnu' && s.state !== '') {
+      return '<span class="chip warn">' + escapeHtml(s.state) + '</span>';
+    }
+    return '<span class="chip ok">OK</span>';
   }
 
   function render() {
@@ -202,27 +176,14 @@
                     : model === undefined ? '<span class="empty">…</span>'
                     : model === '' ? '<span class="empty">inconnu</span>'
                     : escapeHtml(model);
-      // Status badge under the printername — only shown when SNMP reported
-      // something noteworthy (errors, or "imprime" / "préchauffage"). "Prête" is
-      // the boring default and would just add visual noise on every row.
-      var stat = statusState[ip];
-      var statHtml = '';
-      if (stat) {
-        if (stat.errors && stat.errors.length) {
-          statHtml = '<span class="chip bad" style="margin-top:2px" title="Erreurs détectées">⚠ ' + escapeHtml(stat.errors.join(', ')) + '</span>';
-        } else if (stat.state && stat.state !== 'prête' && stat.state !== 'autre' && stat.state !== 'inconnu') {
-          statHtml = '<span class="chip warn" style="margin-top:2px">' + escapeHtml(stat.state) + '</span>';
-        }
-      }
       return '<tr class="printer' + sel + '" data-name="' + escapeHtml(shortName) + '" data-host="' + escapeHtml(p.server || '') + '">'
            +   '<td><span class="dot ' + dotClass(ip) + '" title="' + dotTitle + '"></span><b>' + escapeHtml(shortName) + '</b>'
            +     '<div class="mono">' + escapeHtml(p.printername) + '</div>'
-           +     statHtml
            +   '</td>'
            +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
            +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
            +   '<td>' + modelCell + '</td>'
-           +   '<td>' + suppliesHtml(ip, pingState[ip]) + '</td>'
+           +   '<td>' + statusHtml(ip, pingState[ip]) + '</td>'
            +   '<td>' + escapeHtml(p.location || '') + '</td>'
            +   '<td>' + (function () {
                  // Prefer the live WMI count; fall back to the (often-wrong) cjobs
@@ -298,7 +259,7 @@
       // Ping first — we want to know who's alive before bothering with PJL/SNMP/HTTP
       // on dead printers (each method waits its own timeout before giving up, so
       // a single offline machine can cost 5s of wall time for nothing).
-      pingAll().then(function () { modelsAll(); suppliesAll(); statusAll(); });
+      pingAll().then(function () { modelsAll(); statusAll(); });
       // Independently, fetch real job counts per server. cjobs from rpcclient
       // often returns 0 even when WMI sees real queued jobs.
       countsAll();
@@ -387,31 +348,6 @@
       return api('getStatus', { ip: ip }).then(function (r) {
         if (r) statusState[ip] = { state: r.state || '', errors: r.errors || [] };
       }).catch(function () {}).then(function () {
-        render();
-        return worker();
-      });
-    }
-    for (var k = 0; k < Math.min(8, queue.length); k++) worker();
-  }
-
-  // SNMP-walk the supplies table for every alive printer. Same concurrency
-  // pattern as modelsAll; skipped for dead boxes (snmpwalk would time out anyway).
-  function suppliesAll() {
-    if (!data) return;
-    var ips = {};
-    (data.printers || []).forEach(function (p) {
-      if (p.ip && pingState[p.ip] === true) ips[p.ip] = true;
-    });
-    var queue = Object.keys(ips);
-    if (!queue.length) { render(); return; }
-    var i = 0;
-    function worker() {
-      if (i >= queue.length) return Promise.resolve();
-      var ip = queue[i++];
-      return api('getSupplies', { ip: ip }).then(function (r) {
-        if (r && Array.isArray(r.supplies)) suppliesState[ip] = r.supplies;
-        else suppliesState[ip] = [];
-      }).catch(function () { suppliesState[ip] = []; }).then(function () {
         render();
         return worker();
       });
