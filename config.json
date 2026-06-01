@@ -1,7 +1,7 @@
 {
   "name": "printctl",
   "shortName": "printctl",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "author": "V3locidad",
   "description": "Inventaire, statut online/offline (ping), files d'attente et purge de spooler des imprimantes d'un serveur d'impression Windows. Inventaire via rpcclient (samba-common-bin), jobs/purge via WMI/impacket (python3-impacket).",
   "hasAdminPanel": true,

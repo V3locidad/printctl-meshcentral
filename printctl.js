@@ -8,6 +8,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const http = require('http');
 const { execFile } = require('child_process');
 
 // Cache model strings per IP for the lifetime of the plugin process.
@@ -82,21 +84,91 @@ module.exports.printctl = function (parent) {
     }
 
     // snmpget -O qv emits one quoted value per line. hrDeviceDescr is usually
-    // a clean "HP LaserJet M203dn" or similar; sysDescr is the noisy multi-field
-    // string ("HP ETHERNET MULTI-ENV,SN:…,PID:HP LaserJet M203dn"). For the latter
-    // we try to extract just the model from the PID:/MDL: tag.
+    // a clean "HP LaserJet M203dn"; sysDescr is the noisy multi-field string
+    // ("HP ETHERNET MULTI-ENV,SN:…,PID:HP LaserJet M203dn"). For the latter we
+    // try to extract just the model from the PID:/MDL: tag.
     function parseSnmpModel(stdout) {
         const lines = stdout.split('\n').map((l) => l.replace(/^"|"$/g, '').trim()).filter(Boolean);
         for (const line of lines) {
             if (/^no such/i.test(line) || /timeout/i.test(line)) continue;
-            // HP-style: pull just the model from PID:/MDL: if present.
             const tagged = line.match(/(?:PID|MDL):\s*([^,;]+)/i);
             if (tagged) return tagged[1].trim();
-            // Clean line shorter than 80 chars and without commas → probably the model.
             if (line.length < 80 && !line.includes(',')) return line;
         }
-        // Last resort: the first line, truncated.
         return (lines[0] || '').slice(0, 80);
+    }
+
+    function trySnmp(ip, cb) {
+        const community = (loadCfg() || {}).snmpCommunity || 'public';
+        const args = ['-v', '2c', '-c', community, '-O', 'qv', '-t', '1', '-r', '1', ip,
+                      '1.3.6.1.2.1.25.3.2.1.3.1', '1.3.6.1.2.1.1.1.0'];
+        execFile('snmpget', args, { timeout: 4000, maxBuffer: 64 * 1024 }, (_err, stdout) => {
+            cb(parseSnmpModel(stdout || ''));
+        });
+    }
+
+    // PJL: send the printer-language standard "INFO ID" query on port 9100.
+    // Response looks like: @PJL INFO ID\r\n"HP LaserJet M203dn"\r\n<FF>
+    function tryPjl(ip, cb) {
+        let done = false;
+        let buf = '';
+        const finish = (val) => {
+            if (done) return;
+            done = true;
+            try { sock.destroy(); } catch (e) {}
+            cb(val || '');
+        };
+        const sock = net.connect({ host: ip, port: 9100, timeout: 2500 });
+        sock.on('connect', () => {
+            // PJL Universal Exit Language wrapper around the INFO ID command.
+            sock.write('\x1b%-12345X@PJL INFO ID\r\n\x1b%-12345X');
+        });
+        sock.on('data', (chunk) => {
+            buf += chunk.toString('utf8');
+            // Most printers reply within a frame; if we have the quoted line we're done.
+            const m = buf.match(/"([^"\r\n]{2,80})"/);
+            if (m) finish(m[1].trim());
+            else if (buf.length > 4096) finish('');
+        });
+        sock.on('end', () => finish((buf.match(/"([^"\r\n]+)"/) || [])[1] || ''));
+        sock.on('timeout', () => finish(''));
+        sock.on('error', () => finish(''));
+        setTimeout(() => finish(''), 3500);
+    }
+
+    // HTTP fallback: scrape <title> / ProductModel meta. Same single-fire guard
+    // pattern as PJL to avoid double-response crashes on socket races.
+    function tryHttp(ip, cb) {
+        let done = false;
+        const finish = (val) => { if (done) return; done = true; cb(val || ''); };
+        const r = http.get({ host: ip, port: 80, path: '/', timeout: 2500, headers: { 'User-Agent': 'printctl/1.0' } }, (response) => {
+            if (response.statusCode >= 300 && response.statusCode < 400) { response.resume(); return finish(''); }
+            let body = '';
+            response.on('data', (c) => { if (body.length < 128 * 1024) body += c.toString('utf8'); });
+            response.on('end', () => finish(extractHtmlModel(body)));
+            response.on('error', () => finish(''));
+        });
+        r.on('timeout', () => { try { r.destroy(); } catch (e) {} finish(''); });
+        r.on('error', () => finish(''));
+        setTimeout(() => { try { r.destroy(); } catch (e) {} finish(''); }, 3500);
+    }
+
+    function extractHtmlModel(html) {
+        if (!html) return '';
+        const pick = (re) => { const m = html.match(re); return m ? m[1].replace(/<[^>]+>/g, '').trim() : ''; };
+        const cands = [
+            pick(/<meta[^>]+name=["']ProductName["'][^>]+content=["']([^"']+)/i),
+            pick(/id=["']ProductModel["'][^>]*>\s*([^<]+)</i),
+            pick(/<title>([^<]+)<\/title>/i),
+        ];
+        for (const c of cands) {
+            if (!c) continue;
+            const s = c.replace(/^(HP\s+(Embedded\s+)?Web\s+Server\s*[-|]?\s*)/i, '')
+                       .replace(/\s*[-|]\s*(EWS|Status|Welcome|Home|Web Server|Embedded Web Server).*$/i, '')
+                       .replace(/^Welcome\s+to\s+/i, '').trim();
+            if (s.length > 2 && s.length < 120) return s;
+        }
+        return '';
     }
 
     obj.server_startup = function () {};
@@ -149,23 +221,31 @@ module.exports.printctl = function (parent) {
         }
 
         if (action === 'getModel') {
-            // SNMP get on hrDeviceDescr then sysDescr, both quoted-value output.
-            // We shell out to snmpget (apt: snmp) — its own timeout/retry logic is
-            // way more robust than node's http module for embedded device probes.
             const ip = String(req.query.ip || '').trim();
             if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
-            if (modelCache[ip]) return sendJson(res, 200, { ip: ip, model: modelCache[ip], cached: true });
+            if (modelCache[ip]) return sendJson(res, 200, { ip: ip, model: modelCache[ip], cached: true, via: 'cache' });
 
-            const community = (loadCfg() || {}).snmpCommunity || 'public';
-            // 1.3.6.1.2.1.25.3.2.1.3.1 = hrDeviceDescr (HOST-RESOURCES-MIB, first device)
-            // 1.3.6.1.2.1.1.1.0       = sysDescr (universal SNMPv2-MIB)
-            const args = ['-v', '2c', '-c', community, '-O', 'qv', '-t', '1', '-r', '1', ip,
-                          '1.3.6.1.2.1.25.3.2.1.3.1', '1.3.6.1.2.1.1.1.0'];
-            execFile('snmpget', args, { timeout: 5000, maxBuffer: 64 * 1024 }, (err, stdout) => {
-                const model = parseSnmpModel(stdout || '');
+            // Belt-and-braces: every send must go through this, exactly once.
+            let answered = false;
+            const finish = (model, via) => {
+                if (answered) return;
+                answered = true;
                 if (model) modelCache[ip] = model;
-                sendJson(res, 200, { ip: ip, model: model || '' });
+                try { sendJson(res, 200, { ip: ip, model: model || '', via: via }); } catch (e) {}
+            };
+
+            // 1) SNMP (snmpget). Fastest, but disabled on some printers.
+            trySnmp(ip, (model) => {
+                if (model) return finish(model, 'snmp');
+                // 2) PJL on port 9100. The print port itself — almost always open.
+                tryPjl(ip, (model2) => {
+                    if (model2) return finish(model2, 'pjl');
+                    // 3) HTTP scrape on port 80. Last resort.
+                    tryHttp(ip, (model3) => finish(model3, model3 ? 'http' : 'none'));
+                });
             });
+            // Hard ceiling so even a buggy fallback can't hang the response.
+            setTimeout(() => finish('', 'timeout'), 9000);
             return;
         }
 
