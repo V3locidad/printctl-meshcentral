@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Print Control</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { font-family: Segoe UI, Arial, sans-serif; font-size: 13px; padding: 10px; color: #222; box-sizing: border-box; display: flex; flex-direction: column; }
+  h2 { margin: 0 0 10px 0; font-size: 16px; flex: 0 0 auto; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #f4f4f4; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; flex: 0 0 auto; }
+  .bar input[type=text], .bar select { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
+  button { padding: 5px 10px; border: 1px solid #888; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
+  button.primary { background: #2c7be5; color: white; border-color: #2c7be5; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #eee; font-size: 11px; margin-left: 6px; }
+  .pill.ok { background: #d4edda; color: #155724; }
+  .pill.bad { background: #f8d7da; color: #721c24; }
+  .pill.warn { background: #fff3cd; color: #856404; }
+  .content { flex: 1 1 auto; overflow: auto; border: 1px solid #ddd; border-radius: 4px; min-height: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
+  th { background: #fafafa; font-weight: 600; position: sticky; top: 0; z-index: 1; }
+  tr.salle { background: #fff; }
+  tr.salle:hover { background: #f8f8ff; }
+  td.profile { width: 50%; }
+  .printerCard { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+  .printerName { font-weight: 500; }
+  .printerIp { color: #888; font-size: 11px; font-family: Menlo, Consolas, monospace; }
+  .defaultBadge { background: #2c7be5; color: white; font-size: 10px; padding: 1px 5px; border-radius: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+  .dot.unknown { background: #ccc; }
+  .dot.alive { background: #2ecc71; }
+  .dot.dead { background: #e74c3c; }
+  .empty { color: #aaa; font-style: italic; font-size: 12px; }
+  #cfgState.ok { background: #d4edda; color: #155724; }
+  #cfgState.bad { background: #f8d7da; color: #721c24; }
+</style>
+</head>
+<body>
+
+<h2>Print Control <span id="cfgState" class="pill">checking…</span></h2>
+
+<div class="bar">
+  <strong>Serveur :</strong> <span id="srvName">—</span>
+  <span class="pill" id="srvIp">—</span>
+  <span style="flex:1"></span>
+  <input type="text" id="search" placeholder="Filtrer (salle, imprimante, IP…)" style="width:260px">
+  <button id="pingAllBtn">Tester ping (toutes)</button>
+  <button id="refreshBtn" class="primary">Rafraîchir</button>
+</div>
+
+<div class="content">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:140px">Salle</th>
+        <th class="profile">Imprimantes — Élèves / Examens / Extérieurs</th>
+        <th class="profile">Imprimantes — Profs / Agents / Administratifs</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="3" class="empty" style="padding:12px">Chargement…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+  function $(id) { return document.getElementById(id); }
+  function api(action, params) {
+    var qs = 'action=' + encodeURIComponent(action);
+    if (params) Object.keys(params).forEach(function (k) {
+      qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+    });
+    return fetch('/pluginadmin.ashx?pin=printctl&' + qs, { credentials: 'include' }).then(function (r) { return r.json(); });
+  }
+
+  // Cache ping state per IP across renders so we don't lose dots on filter change.
+  var pingState = {};
+  var data = null;
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
+  function dotClass(ip) {
+    var st = pingState[ip];
+    if (st === true) return 'alive';
+    if (st === false) return 'dead';
+    return 'unknown';
+  }
+
+  function printerHtml(p) {
+    var dot = '<span class="dot ' + dotClass(p.IP) + '" title="' + (pingState[p.IP] === true ? 'En ligne' : pingState[p.IP] === false ? 'Hors ligne' : 'Statut inconnu') + '"></span>';
+    var def = p.Defaut ? '<span class="defaultBadge">défaut</span>' : '';
+    return '<div class="printerCard">'
+         +   dot
+         + '  <span class="printerName">' + escapeHtml(p.Nom) + '</span>'
+         + '  <span class="printerIp">' + escapeHtml(p.IP) + '</span>'
+         +   def
+         + '</div>';
+  }
+
+  function render() {
+    if (!data) return;
+    var q = ($('search').value || '').toLowerCase().trim();
+    var rows = data.salles.filter(function (s) {
+      if (!q) return true;
+      if (s.name.toLowerCase().indexOf(q) !== -1) return true;
+      var allPrinters = (s.eleves || []).concat(s.personnels || []);
+      return allPrinters.some(function (p) {
+        return (p.Nom || '').toLowerCase().indexOf(q) !== -1
+            || (p.NomPartage || '').toLowerCase().indexOf(q) !== -1
+            || (p.IP || '').indexOf(q) !== -1;
+      });
+    });
+    if (!rows.length) {
+      $('tbody').innerHTML = '<tr><td colspan="3" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
+      return;
+    }
+    $('tbody').innerHTML = rows.map(function (s) {
+      var elevesHtml = s.eleves.length ? s.eleves.map(printerHtml).join('') : '<span class="empty">—</span>';
+      var persoHtml = s.personnels.length ? s.personnels.map(printerHtml).join('') : '<span class="empty">—</span>';
+      return '<tr class="salle">'
+           +   '<td>' + escapeHtml(s.name) + '</td>'
+           +   '<td class="profile">' + elevesHtml + '</td>'
+           +   '<td class="profile">' + persoHtml + '</td>'
+           + '</tr>';
+    }).join('');
+  }
+
+  function uniqueIps() {
+    var set = {};
+    (data.salles || []).forEach(function (s) {
+      (s.eleves || []).concat(s.personnels || []).forEach(function (p) {
+        if (p.IP) set[p.IP] = true;
+      });
+    });
+    return Object.keys(set);
+  }
+
+  function pingAll() {
+    if (!data) return;
+    var ips = uniqueIps();
+    if (!ips.length) return;
+    $('pingAllBtn').disabled = true;
+    $('pingAllBtn').textContent = 'Ping en cours… 0/' + ips.length;
+    var done = 0;
+    // Limit concurrency so we don't ICMP-storm the network. 6 in flight is plenty.
+    var i = 0;
+    function worker() {
+      if (i >= ips.length) return Promise.resolve();
+      var ip = ips[i++];
+      return api('pingPrinter', { ip: ip }).then(function (r) {
+        if (r && typeof r.alive === 'boolean') pingState[ip] = r.alive;
+      }).catch(function () {}).then(function () {
+        done++;
+        $('pingAllBtn').textContent = 'Ping en cours… ' + done + '/' + ips.length;
+        render();
+        return worker();
+      });
+    }
+    var workers = [];
+    for (var k = 0; k < Math.min(6, ips.length); k++) workers.push(worker());
+    Promise.all(workers).then(function () {
+      $('pingAllBtn').disabled = false;
+      $('pingAllBtn').textContent = 'Tester ping (toutes)';
+    });
+  }
+
+  function load() {
+    $('tbody').innerHTML = '<tr><td colspan="3" class="empty" style="padding:12px">Chargement…</td></tr>';
+    api('list').then(function (r) {
+      if (r.error) {
+        $('cfgState').textContent = 'Erreur: ' + r.error;
+        $('cfgState').className = 'pill bad';
+        $('tbody').innerHTML = '<tr><td colspan="3" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
+        return;
+      }
+      data = r;
+      $('srvName').textContent = r.server || '—';
+      $('srvIp').textContent = r.ip || '—';
+      $('cfgState').textContent = (r.salles ? r.salles.length : 0) + ' salles';
+      $('cfgState').className = 'pill ok';
+      render();
+    }).catch(function (e) {
+      $('cfgState').textContent = 'endpoint injoignable';
+      $('cfgState').className = 'pill bad';
+    });
+  }
+
+  $('search').oninput = render;
+  $('refreshBtn').onclick = load;
+  $('pingAllBtn').onclick = pingAll;
+  load();
+</script>
+</body>
+</html>

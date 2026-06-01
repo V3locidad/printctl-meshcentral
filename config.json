@@ -1,0 +1,14 @@
+{
+  "name": "printctl",
+  "shortName": "printctl",
+  "version": "0.0.1",
+  "author": "V3locidad",
+  "description": "Visualiseur (lecture seule) du déploiement d'imprimantes par salle. Lit le JSON GPO Imprimantes_Par_OU.json depuis SYSVOL. L'édition reste l'apanage de EannaAD.",
+  "hasAdminPanel": true,
+  "homepage": "https://github.com/V3locidad/printctl-meshcentral",
+  "changelogUrl": "https://raw.githubusercontent.com/V3locidad/printctl-meshcentral/main/changelog.md",
+  "configUrl": "https://raw.githubusercontent.com/V3locidad/printctl-meshcentral/main/config.json",
+  "downloadUrl": "https://github.com/V3locidad/printctl-meshcentral/archive/refs/heads/main.zip",
+  "repository": { "type": "git", "url": "https://github.com/V3locidad/printctl-meshcentral.git" },
+  "meshCentralCompat": ">=1.1.0"
+}

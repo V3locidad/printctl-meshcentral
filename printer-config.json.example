@@ -1,0 +1,4 @@
+{
+  "_comment": "Renomme ce fichier en printer-config.json. jsonPath est le chemin local du fichier Imprimantes_Par_OU.json (résultat du mount CIFS de SYSVOL).",
+  "jsonPath": "/mnt/sysvol/L-GRAVES.LOCAL/Policies/{85ECF9E2-D587-4736-BE0F-1BFCBB9D4977}/User/Scripts/Logon/Imprimantes_Par_OU.json"
+}
