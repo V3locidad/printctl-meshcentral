@@ -112,10 +112,11 @@ module.exports.printctl = function (parent) {
         }
 
         if (action === 'jobs') {
-            const p = String(req.query.printer || '').trim();
-            // Allow only printable ASCII for the printer name; rpcclient -c is shell-quoted
-            // by execFile so injection isn't possible, but we still reject garbage.
-            if (!p || /["\r\n`$\\]/.test(p)) return sendJson(res, 400, { error: 'printer invalide' });
+            // enumprinters returns UNC paths (\\HOST\NAME) but enumjobs wants just NAME.
+            // Strip the prefix and any surviving backslashes, then reject anything weird.
+            const raw = String(req.query.printer || '').trim();
+            const p = raw.replace(/^\\+[^\\]+\\+/, '').replace(/^\\+/, '');
+            if (!p || /["\r\n`$;|&<>\\]/.test(p)) return sendJson(res, 400, { error: 'nom imprimante invalide: ' + raw });
             return rpc('enumjobs "' + p + '"', (err, stdout) => {
                 if (err) return sendJson(res, 500, { error: err.message });
                 sendJson(res, 200, { printer: p, jobs: parseEnumjobs(stdout) });
