@@ -69,8 +69,11 @@ module.exports.printctl = function (parent) {
                 printers.push(obj);
             }
         });
-        printers.sort((a, b) => (a.printername || '').localeCompare(b.printername || '', 'fr', { numeric: true }));
-        return printers;
+        // Drop the built-in Windows virtual printers — they're noise for our use case.
+        const VIRTUAL = /(^|\\)(Microsoft (Print to PDF|XPS Document Writer)|Fax|OneNote)( |$)/i;
+        const real = printers.filter((p) => !VIRTUAL.test(p.printername || '') && !VIRTUAL.test(p.sharename || ''));
+        real.sort((a, b) => (a.printername || '').localeCompare(b.printername || '', 'fr', { numeric: true }));
+        return real;
     }
 
     obj.server_startup = function () {};
