@@ -90,7 +90,7 @@ module.exports.printctl = function (parent) {
 
     obj.server_startup = function () {};
 
-    obj.handleAdminReq = function (req, res /*, user */) {
+    obj.handleAdminReq = function (req, res, user) {
         const action = (req.query && req.query.action) || '';
 
         if (action === 'ping') {
@@ -122,7 +122,8 @@ module.exports.printctl = function (parent) {
             });
         }
 
-        return sendJson(res, 404, { error: 'unknown action' });
+        // Default (no `action`): render the plugin's handlebars view.
+        res.render(path.join(__dirname, 'views/printctl'), { user: user });
     };
 
     return obj;
