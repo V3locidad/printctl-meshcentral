@@ -29,22 +29,39 @@ module.exports.printctl = function (parent) {
         catch (e) { return null; }
     }
 
+    // Normalise the host list. Supports both new ("hosts": [...]) and legacy
+    // ("host": "...") shapes so an old config keeps working without an edit.
+    function hostsOf(cfg) {
+        if (!cfg) return [];
+        if (Array.isArray(cfg.hosts) && cfg.hosts.length) return cfg.hosts.filter(Boolean);
+        if (cfg.host) return [cfg.host];
+        return [];
+    }
+
+    // Pull an IPv4 out of the printer's PortName. Windows-spool ports come in a
+    // bunch of shapes: "172.17.103.221" (raw IP), "IP_172.19.238.246"
+    // (Standard TCP/IP port), "WSD-uuid" (no IP available). We just grep the
+    // first dotted-quad we see.
+    function ipFromPort(port) {
+        const m = String(port || '').match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+        return m ? m[1] : '';
+    }
+
     function sendJson(res, code, payload) {
         res.status(code || 200).set('Content-Type', 'application/json').send(JSON.stringify(payload));
     }
 
-    // Run rpcclient against the print server. We pass credentials via -U DOMAIN/user%pass.
+    // Run rpcclient against a specific print server. We pass credentials via -U DOMAIN/user%pass.
     // Output is parsed line-by-line; rpcclient is the same vintage as Samba 3 so the
     // format is extremely stable. Timeout caps a stuck spooler from hanging the UI.
-    function rpc(cmd, cb) {
+    function rpc(host, cmd, cb) {
         const cfg = loadCfg();
-        if (!cfg || !cfg.host || !cfg.user || !cfg.password) return cb(new Error('printer-config.json manquant ou incomplet'));
+        if (!cfg || !cfg.user || !cfg.password) return cb(new Error('printer-config.json manquant ou incomplet'));
+        if (!host) return cb(new Error('host required'));
         const user = (cfg.domain ? cfg.domain + '/' : '') + cfg.user + '%' + cfg.password;
-        const args = ['-U', user, '//' + cfg.host, '-c', cmd];
+        const args = ['-U', user, '//' + host, '-c', cmd];
         execFile('rpcclient', args, { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
             if (err) {
-                // rpcclient frequently prints the actual cause in stderr; expose more of it
-                // than just the first line so we can debug DOS/permission errors quickly.
                 const msg = (stderr || '').trim() || (err.message || '').trim() || 'rpcclient failed';
                 return cb(new Error(msg.split('\n').slice(0, 3).join(' | ')));
             }
@@ -79,6 +96,9 @@ module.exports.printctl = function (parent) {
         // Drop the built-in Windows virtual printers — they're noise for our use case.
         const VIRTUAL = /(^|\\)(Microsoft (Print to PDF|XPS Document Writer)|Fax|OneNote)( |$)/i;
         const real = printers.filter((p) => !VIRTUAL.test(p.printername || '') && !VIRTUAL.test(p.sharename || ''));
+        // Stamp the IPv4 we can salvage from PortName so the UI doesn't have to
+        // re-parse "IP_172.19.238.246" etc. for ping/SNMP.
+        real.forEach((p) => { p.ip = ipFromPort(p.portname); });
         real.sort((a, b) => (a.printername || '').localeCompare(b.printername || '', 'fr', { numeric: true }));
         return real;
     }
@@ -177,35 +197,58 @@ module.exports.printctl = function (parent) {
         const action = (req.query && req.query.action) || '';
 
         if (action === 'ping') {
-            // Smoke test: list printers and report the count. Cheapest non-trivial RPC call.
             const cfg = loadCfg();
-            if (!cfg) return sendJson(res, 200, { ok: false, error: 'printer-config.json manquant' });
-            return rpc('enumprinters 2', (err, stdout) => {
-                if (err) return sendJson(res, 200, { ok: false, host: cfg.host, error: err.message });
-                const printers = parseEnumprinters(stdout);
-                sendJson(res, 200, { ok: true, host: cfg.host, count: printers.length });
+            const hosts = hostsOf(cfg);
+            if (!hosts.length) return sendJson(res, 200, { ok: false, error: 'aucun host configuré dans printer-config.json' });
+            // Per-host smoke test; we report ok if at least one host responded.
+            Promise.all(hosts.map((h) => new Promise((resolve) => {
+                rpc(h, 'enumprinters 2', (err, stdout) => {
+                    if (err) return resolve({ host: h, ok: false, error: err.message });
+                    resolve({ host: h, ok: true, count: parseEnumprinters(stdout).length });
+                });
+            }))).then((results) => {
+                sendJson(res, 200, { ok: results.some((r) => r.ok), hosts: results });
             });
+            return;
         }
 
         if (action === 'list') {
-            return rpc('enumprinters 2', (err, stdout) => {
-                if (err) return sendJson(res, 500, { error: err.message });
-                sendJson(res, 200, { printers: parseEnumprinters(stdout) });
+            const cfg = loadCfg();
+            const hosts = hostsOf(cfg);
+            if (!hosts.length) return sendJson(res, 500, { error: 'aucun host configuré dans printer-config.json' });
+            // Query every server in parallel; tag each printer with its server so
+            // the UI can route jobs/purge calls back to the right one.
+            Promise.all(hosts.map((h) => new Promise((resolve) => {
+                rpc(h, 'enumprinters 2', (err, stdout) => {
+                    if (err) return resolve({ host: h, error: err.message, printers: [] });
+                    const printers = parseEnumprinters(stdout).map((p) => Object.assign({}, p, { server: h }));
+                    resolve({ host: h, printers: printers });
+                });
+            }))).then((results) => {
+                const all = [].concat.apply([], results.map((r) => r.printers));
+                const errors = results.filter((r) => r.error).map((r) => ({ host: r.host, error: r.error }));
+                sendJson(res, 200, { printers: all, errors: errors });
             });
+            return;
         }
 
         if (action === 'jobs' || action === 'purge') {
-            // rpcclient's enumjobs is broken with modern Windows print servers
-            // (DOS 0x8001011b on every call), so we shell out to a small Python helper
-            // that queries (or deletes) Win32_PrintJob via WMI through impacket instead.
+            // Pythonic WMI client (impacket); see wmi_print_jobs.py.
             const cfg = loadCfg();
             if (!cfg) return sendJson(res, 500, { error: 'printer-config.json manquant' });
+            const hosts = hostsOf(cfg);
+            // Require the caller to tell us which server holds the printer (a printer
+            // can have the same name on two servers); fall back to the first host
+            // when the UI didn't pass one (legacy callers).
+            const requested = String(req.query.host || '').trim();
+            const host = (requested && hosts.indexOf(requested) !== -1) ? requested : hosts[0];
+            if (!host) return sendJson(res, 500, { error: 'host inconnu' });
             const raw = String(req.query.printer || '').trim();
             const printer = raw.replace(/^\\+[^\\]+\\+/, '').replace(/^\\+/, '');
             if (!printer || /["\r\n`$;|&<>]/.test(printer)) return sendJson(res, 400, { error: 'nom imprimante invalide' });
             const mode = action === 'purge' ? 'purge' : 'list';
             const script = path.join(__dirname, 'wmi_print_jobs.py');
-            execFile('python3', [script, mode, cfg.host, cfg.user, cfg.password, cfg.domain || '', printer],
+            execFile('python3', [script, mode, host, cfg.user, cfg.password, cfg.domain || '', printer],
                 { timeout: 30000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
                     if (err && !stdout) {
                         return sendJson(res, 500, { error: (stderr || err.message || 'wmi failed').split('\n')[0] });

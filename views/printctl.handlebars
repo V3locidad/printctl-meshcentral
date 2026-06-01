@@ -46,7 +46,7 @@
 <h2>Print Control <span id="cfgState" class="pill">checking…</span></h2>
 
 <div class="bar">
-  <strong>Serveur :</strong> <span id="srvHost" class="mono">—</span>
+  <strong>Serveur(s) :</strong> <span id="srvHost" class="mono">—</span>
   <span style="flex:1"></span>
   <input type="text" id="search" placeholder="Filtrer (nom, partage, IP, driver…)" style="width:280px">
   <button id="refreshBtn" class="primary">Rafraîchir</button>
@@ -108,7 +108,7 @@
   var modelState = {};
 
   function dotClass(ip) {
-    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip || '')) return 'unknown';
+    if (!ip) return 'unknown';
     var s = pingState[ip];
     if (s === true) return 'alive';
     if (s === false) return 'dead';
@@ -131,16 +131,18 @@
     // \\host\name path is shown as subtitle in case someone needs to copy-paste it.
     $('tbody').innerHTML = rows.map(function (p) {
       var shortName = (p.printername || '').split('\\').pop();
-      var sel = (selectedPrinter === shortName) ? ' selected' : '';
-      var dotTitle = pingState[p.portname] === true ? 'En ligne'
-                   : pingState[p.portname] === false ? 'Hors ligne'
+      var sel = (selectedPrinter && selectedPrinter.name === shortName && selectedPrinter.host === p.server) ? ' selected' : '';
+      var ip = p.ip || '';
+      var dotTitle = pingState[ip] === true ? 'En ligne'
+                   : pingState[ip] === false ? 'Hors ligne'
                    : 'Statut inconnu';
-      var model = modelState[p.portname];
-      var modelCell = model === undefined ? '<span class="empty">…</span>'
+      var model = modelState[ip];
+      var modelCell = !ip ? '<span class="empty">—</span>'
+                    : model === undefined ? '<span class="empty">…</span>'
                     : model === '' ? '<span class="empty">inconnu</span>'
                     : escapeHtml(model);
-      return '<tr class="printer' + sel + '" data-name="' + escapeHtml(shortName) + '">'
-           +   '<td><span class="dot ' + dotClass(p.portname) + '" title="' + dotTitle + '"></span><b>' + escapeHtml(shortName) + '</b>'
+      return '<tr class="printer' + sel + '" data-name="' + escapeHtml(shortName) + '" data-host="' + escapeHtml(p.server || '') + '">'
+           +   '<td><span class="dot ' + dotClass(ip) + '" title="' + dotTitle + '"></span><b>' + escapeHtml(shortName) + '</b>'
            +     '<div class="mono">' + escapeHtml(p.printername) + '</div>'
            +   '</td>'
            +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
@@ -150,19 +152,19 @@
            + '</tr>';
     }).join('');
     [].slice.call(document.querySelectorAll('tr.printer')).forEach(function (tr) {
-      tr.onclick = function () { openJobs(tr.getAttribute('data-name')); };
+      tr.onclick = function () { openJobs(tr.getAttribute('data-name'), tr.getAttribute('data-host')); };
     });
   }
 
   // Win32_PrintJob.JobStatus is a bitmask; the human-friendly Status string is more
   // useful. We fall back to the bitmask if Status is empty.
-  function openJobs(name) {
-    selectedPrinter = name;
+  function openJobs(name, host) {
+    selectedPrinter = { name: name, host: host || '' };
     render();
     $('jobsPanel').style.display = '';
-    $('jobsTitle').textContent = name;
+    $('jobsTitle').textContent = name + (host ? '  (' + host + ')' : '');
     $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
-    api('jobs', { printer: name }).then(function (r) {
+    api('jobs', { printer: name, host: host || '' }).then(function (r) {
       if (r.error) {
         $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
         return;
@@ -218,7 +220,7 @@
     if (!data) return;
     var ips = {};
     (data.printers || []).forEach(function (p) {
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(p.portname || '')) ips[p.portname] = true;
+      if (p.ip) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
     if (!queue.length) return;
@@ -242,7 +244,7 @@
     if (!data) return;
     var ips = {};
     (data.printers || []).forEach(function (p) {
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(p.portname || '')) ips[p.portname] = true;
+      if (p.ip) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
     if (!queue.length) return;
@@ -262,18 +264,22 @@
   }
 
   api('ping').then(function (r) {
-    if (r && r.host) $('srvHost').textContent = r.host;
+    if (r && Array.isArray(r.hosts) && r.hosts.length) {
+      $('srvHost').textContent = r.hosts.map(function (h) {
+        return h.host + (h.ok ? ' (' + h.count + ')' : ' [' + (h.error || 'KO') + ']');
+      }).join(' · ');
+    }
   });
   $('search').oninput = render;
   $('refreshBtn').onclick = load;
-  $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter); };
+  $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter.name, selectedPrinter.host); };
   $('jobsClose').onclick = function () { $('jobsPanel').style.display = 'none'; selectedPrinter = null; render(); };
   $('jobsPurge').onclick = function () {
     if (!selectedPrinter) return;
-    if (!confirm('Vider TOUTE la file d\'attente de ' + selectedPrinter + ' ?\n\nLes jobs en cours seront supprimés sur le serveur d\'impression.')) return;
+    if (!confirm('Vider TOUTE la file d\'attente de ' + selectedPrinter.name + ' ?\n\nLes jobs en cours seront supprimés sur le serveur d\'impression.')) return;
     $('jobsPurge').disabled = true;
     $('jobsPurge').textContent = 'Suppression…';
-    api('purge', { printer: selectedPrinter }).then(function (r) {
+    api('purge', { printer: selectedPrinter.name, host: selectedPrinter.host || '' }).then(function (r) {
       $('jobsPurge').disabled = false;
       $('jobsPurge').textContent = 'Vider la file';
       if (r.error) { alert('Erreur: ' + r.error); return; }
@@ -291,7 +297,7 @@
         msg += '\n\nAucun job trouvé en WMI pour cette imprimante (alors qu\'ils sont dans la file côté serveur). Vérifie le format du nom.';
       }
       alert(msg);
-      openJobs(selectedPrinter);
+      openJobs(selectedPrinter.name, selectedPrinter.host);
       load();
     });
   };

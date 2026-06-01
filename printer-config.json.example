@@ -1,8 +1,8 @@
 {
-  "_comment": "Renomme en printer-config.json. snmpCommunity n'est utilisé que pour la récupération du modèle d'imprimante via SNMP (défaut 'public').",
-  "host": "172.17.103.234",
-  "user": "svc_printctl",
+  "_comment": "Renomme en printer-config.json. hosts: tableau des serveurs d'impression Windows (IP ou FQDN). user/password/domain: compte AD avec droits sur tous les serveurs. snmpCommunity: utilisée pour la récupération du modèle d'imprimante (défaut 'public').",
+  "hosts": ["PRINT_SERVER_1", "PRINT_SERVER_2"],
+  "user": "REPLACE_ME",
   "password": "REPLACE_ME",
-  "domain": "L-GRAVES",
+  "domain": "REPLACE_ME",
   "snmpCommunity": "public"
 }
