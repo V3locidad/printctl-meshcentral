@@ -107,6 +107,8 @@
   var pingState = {};
   // ip -> model string (or "" once we know there is none).
   var modelState = {};
+  // "host|PrinterShortName" -> live job count from WMI (overrides rpcclient cjobs).
+  var jobCountState = {};
 
   function dotClass(ip) {
     if (!ip) return 'unknown';
@@ -151,9 +153,15 @@
            +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
            +   '<td>' + modelCell + '</td>'
            +   '<td>' + escapeHtml(p.location || '') + '</td>'
-           +   '<td>' + (p.cjobs > 0
-                         ? '<span class="badge jobs">' + p.cjobs + ' job' + (p.cjobs > 1 ? 's' : '') + '</span>'
-                         : '<span class="badge idle">vide</span>') + '</td>'
+           +   '<td>' + (function () {
+                 // Prefer the live WMI count; fall back to the (often-wrong) cjobs
+                 // from rpcclient if we haven't fetched counts yet for this server.
+                 var key = (p.server || '') + '|' + shortName;
+                 var n = jobCountState.hasOwnProperty(key) ? jobCountState[key] : (p.cjobs || 0);
+                 return n > 0
+                   ? '<span class="badge jobs">' + n + ' job' + (n > 1 ? 's' : '') + '</span>'
+                   : '<span class="badge idle">vide</span>';
+               })() + '</td>'
            + '</tr>';
     }).join('');
     [].slice.call(document.querySelectorAll('tr.printer')).forEach(function (tr) {
@@ -215,6 +223,9 @@
       // on dead printers (each method waits its own timeout before giving up, so
       // a single offline machine can cost 5s of wall time for nothing).
       pingAll().then(modelsAll);
+      // Independently, fetch real job counts per server. cjobs from rpcclient
+      // often returns 0 even when WMI sees real queued jobs.
+      countsAll();
     }).catch(function () {
       $('cfgState').textContent = 'endpoint injoignable';
       $('cfgState').className = 'pill bad';
@@ -280,6 +291,22 @@
       }).join(' · ');
     }
   });
+  // Get the authoritative job counts via WMI, one query per server.
+  function countsAll() {
+    if (!data) return;
+    var hosts = {};
+    (data.printers || []).forEach(function (p) { if (p.server) hosts[p.server] = true; });
+    Object.keys(hosts).forEach(function (host) {
+      api('jobCounts', { host: host }).then(function (r) {
+        if (!r || !r.counts) return;
+        Object.keys(r.counts).forEach(function (printerName) {
+          jobCountState[host + '|' + printerName] = r.counts[printerName];
+        });
+        render();
+      });
+    });
+  }
+
   $('search').oninput = render;
   $('refreshBtn').onclick = load;
   $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter.name, selectedPrinter.host); };

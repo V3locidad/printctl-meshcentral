@@ -238,6 +238,32 @@ module.exports.printctl = function (parent) {
             return;
         }
 
+        if (action === 'jobCounts') {
+            // One WMI Win32_PrintJob query per server; Python aggregates jobs by
+            // printer name. rpcclient's cjobs in enumprinters frequently lies (0
+            // even with queued jobs), so we use this as the source of truth.
+            const cfg = loadCfg();
+            if (!cfg) return sendJson(res, 500, { error: 'printer-config.json manquant' });
+            const hosts = hostsOf(cfg);
+            const requested = String(req.query.host || '').trim();
+            const host = (requested && hosts.indexOf(requested) !== -1) ? requested : hosts[0];
+            if (!host) return sendJson(res, 500, { error: 'host inconnu' });
+            const script = path.join(__dirname, 'wmi_print_jobs.py');
+            execFile('python3', [script, 'counts', host, cfg.user, cfg.password, cfg.domain || ''],
+                { timeout: 25000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+                    if (err && !stdout) {
+                        return sendJson(res, 500, { error: (stderr || err.message || 'wmi failed').split('\n')[0] });
+                    }
+                    try {
+                        const obj = JSON.parse(stdout.trim().split('\n').pop());
+                        sendJson(res, 200, obj);
+                    } catch (e) {
+                        sendJson(res, 500, { error: 'invalid WMI output: ' + stdout.slice(0, 200) });
+                    }
+                });
+            return;
+        }
+
         if (action === 'jobs' || action === 'purge') {
             // Pythonic WMI client (impacket); see wmi_print_jobs.py.
             const cfg = loadCfg();

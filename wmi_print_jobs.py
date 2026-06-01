@@ -5,8 +5,10 @@ Query / purge Win32_PrintJob on a Windows print server via WMI (impacket).
 Usage:
   wmi_print_jobs.py list   HOST USER PASS DOMAIN [PRINTER]
   wmi_print_jobs.py purge  HOST USER PASS DOMAIN PRINTER
+  wmi_print_jobs.py counts HOST USER PASS DOMAIN
 
-Outputs a single JSON line on stdout: {"jobs": [...]} or {"deleted": N} or {"error": "..."}.
+Outputs a single JSON line on stdout:
+  {"jobs": [...]} or {"deleted": N} or {"counts": {"PrinterName": N, ...}} or {"error": "..."}.
 """
 
 import sys
@@ -95,6 +97,19 @@ def main():
 
         if mode == 'list':
             emit({"jobs": jobs})
+            return
+
+        if mode == 'counts':
+            counts = {}
+            for j in jobs:
+                # Win32_PrintJob.Name = "PrinterShortName, JobId" — split on the LAST
+                # comma so a printer with a comma in its name still parses cleanly.
+                n = j.get('name', '')
+                idx = n.rfind(',')
+                p = (n[:idx] if idx > 0 else n).strip()
+                if p:
+                    counts[p] = counts.get(p, 0) + 1
+            emit({"counts": counts})
             return
 
         deleted = 0
