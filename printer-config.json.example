@@ -1,7 +1,8 @@
 {
-  "_comment": "Renomme en printer-config.json. Compte AD avec droits 'Manage Printers' en lecture sur le serveur d'impression.",
+  "_comment": "Renomme en printer-config.json. snmpCommunity n'est utilisé que pour la récupération du modèle d'imprimante via SNMP (défaut 'public').",
   "host": "172.17.103.234",
   "user": "svc_printctl",
   "password": "REPLACE_ME",
-  "domain": "L-GRAVES"
+  "domain": "L-GRAVES",
+  "snmpCommunity": "public"
 }

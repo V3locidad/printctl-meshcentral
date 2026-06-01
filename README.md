@@ -6,10 +6,10 @@ Aucune dépendance à EannaAD ni à SYSVOL.
 
 ## Prérequis serveur MeshCentral (Linux)
 
-Installer `rpcclient` (inventaire imprimantes) et `impacket` (files d'attente WMI) :
+Installer `rpcclient` (inventaire imprimantes), `impacket` (files d'attente WMI) et `snmpget` (récupération du modèle d'imprimante) :
 
 ```bash
-sudo apt install -y samba-common-bin python3-impacket
+sudo apt install -y samba-common-bin python3-impacket snmp
 ```
 
 ## Compte de service AD

@@ -8,7 +8,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const http = require('http');
 const { execFile } = require('child_process');
 
 // Cache model strings per IP for the lifetime of the plugin process.
@@ -82,30 +81,22 @@ module.exports.printctl = function (parent) {
         return real;
     }
 
-    // Try a handful of patterns. Order matters: we return the first non-empty hit.
-    // Strings get trimmed and de-genericised (e.g. drop "Status" / "Welcome" / "EWS").
-    function extractModel(html) {
-        if (!html) return '';
-        const tryPick = (re) => {
-            const m = html.match(re);
-            return m ? m[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').trim() : '';
-        };
-        const candidates = [
-            tryPick(/<meta[^>]+name="ProductName"[^>]+content="([^"]+)"/i),
-            tryPick(/id=["']ProductModel["'][^>]*>\s*([^<]+)</i),
-            tryPick(/<title>([^<]+)<\/title>/i),
-            tryPick(/Model\s*:?\s*<[^>]+>\s*([^<]+)</i),
-        ];
-        for (const c of candidates) {
-            if (!c) continue;
-            // Strip the most common boilerplate suffixes/prefixes on the title.
-            let s = c.replace(/^(HP\s+(Embedded\s+)?Web\s+Server\s*[-|]?\s*)/i, '')
-                     .replace(/\s*[-|]\s*(EWS|Status|Welcome|Home|Web Server|Embedded Web Server).*$/i, '')
-                     .replace(/^Welcome\s+to\s+/i, '')
-                     .trim();
-            if (s && s.length > 2 && s.length < 120) return s;
+    // snmpget -O qv emits one quoted value per line. hrDeviceDescr is usually
+    // a clean "HP LaserJet M203dn" or similar; sysDescr is the noisy multi-field
+    // string ("HP ETHERNET MULTI-ENV,SN:…,PID:HP LaserJet M203dn"). For the latter
+    // we try to extract just the model from the PID:/MDL: tag.
+    function parseSnmpModel(stdout) {
+        const lines = stdout.split('\n').map((l) => l.replace(/^"|"$/g, '').trim()).filter(Boolean);
+        for (const line of lines) {
+            if (/^no such/i.test(line) || /timeout/i.test(line)) continue;
+            // HP-style: pull just the model from PID:/MDL: if present.
+            const tagged = line.match(/(?:PID|MDL):\s*([^,;]+)/i);
+            if (tagged) return tagged[1].trim();
+            // Clean line shorter than 80 chars and without commas → probably the model.
+            if (line.length < 80 && !line.includes(',')) return line;
         }
-        return '';
+        // Last resort: the first line, truncated.
+        return (lines[0] || '').slice(0, 80);
     }
 
     obj.server_startup = function () {};
@@ -158,43 +149,23 @@ module.exports.printctl = function (parent) {
         }
 
         if (action === 'getModel') {
-            // Best-effort scrape of the printer's embedded web server. HP, Brother,
-            // Lexmark and most others put the model in <title>; some HP firmwares
-            // expose a ProductModel field in the body. We give up after 3s — these
-            // pages are not standardised and we shouldn't block the UI.
+            // SNMP get on hrDeviceDescr then sysDescr, both quoted-value output.
+            // We shell out to snmpget (apt: snmp) — its own timeout/retry logic is
+            // way more robust than node's http module for embedded device probes.
             const ip = String(req.query.ip || '').trim();
             if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
             if (modelCache[ip]) return sendJson(res, 200, { ip: ip, model: modelCache[ip], cached: true });
 
-            // Guard: every error/end path can fire, but the response must be sent
-            // exactly once or Node throws ERR_HTTP_HEADERS_SENT and the worker dies.
-            let answered = false;
-            const sendModel = (model) => {
-                if (answered) return;
-                answered = true;
+            const community = (loadCfg() || {}).snmpCommunity || 'public';
+            // 1.3.6.1.2.1.25.3.2.1.3.1 = hrDeviceDescr (HOST-RESOURCES-MIB, first device)
+            // 1.3.6.1.2.1.1.1.0       = sysDescr (universal SNMPv2-MIB)
+            const args = ['-v', '2c', '-c', community, '-O', 'qv', '-t', '1', '-r', '1', ip,
+                          '1.3.6.1.2.1.25.3.2.1.3.1', '1.3.6.1.2.1.1.1.0'];
+            execFile('snmpget', args, { timeout: 5000, maxBuffer: 64 * 1024 }, (err, stdout) => {
+                const model = parseSnmpModel(stdout || '');
                 if (model) modelCache[ip] = model;
-                try { sendJson(res, 200, { ip: ip, model: model || '' }); } catch (e) {}
-            };
-
-            const r = http.get({ host: ip, port: 80, path: '/', timeout: 3000, headers: { 'User-Agent': 'printctl/1.0' } }, (response) => {
-                if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                    response.resume();
-                    return sendModel('');  // don't follow redirects
-                }
-                let body = '';
-                let size = 0;
-                response.on('data', (chunk) => {
-                    size += chunk.length;
-                    if (size < 200 * 1024) body += chunk.toString('utf8');
-                });
-                response.on('end', () => sendModel(extractModel(body)));
-                response.on('error', () => sendModel(''));
+                sendJson(res, 200, { ip: ip, model: model || '' });
             });
-            r.on('timeout', () => { r.destroy(); sendModel(''); });
-            r.on('error', () => sendModel(''));
-            // Hard ceiling: belt-and-braces in case the socket goes silent without
-            // emitting 'timeout' (DNS resolver hangs, half-open TCP, etc.).
-            setTimeout(() => { try { r.destroy(); } catch (e) {} sendModel(''); }, 4000);
             return;
         }
 
