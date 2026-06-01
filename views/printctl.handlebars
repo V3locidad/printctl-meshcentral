@@ -138,6 +138,7 @@
                    : 'Statut inconnu';
       var model = modelState[ip];
       var modelCell = !ip ? '<span class="empty">—</span>'
+                    : pingState[ip] === false ? '<span class="empty">hors ligne</span>'
                     : model === undefined ? '<span class="empty">…</span>'
                     : model === '' ? '<span class="empty">inconnu</span>'
                     : escapeHtml(model);
@@ -206,24 +207,27 @@
       $('cfgState').textContent = (r.printers ? r.printers.length : 0) + ' imprimantes';
       $('cfgState').className = 'pill ok';
       render();
-      pingAll();
-      modelsAll();
+      // Ping first — we want to know who's alive before bothering with PJL/SNMP/HTTP
+      // on dead printers (each method waits its own timeout before giving up, so
+      // a single offline machine can cost 5s of wall time for nothing).
+      pingAll().then(modelsAll);
     }).catch(function () {
       $('cfgState').textContent = 'endpoint injoignable';
       $('cfgState').className = 'pill bad';
     });
   }
 
-  // Probe each unique IPv4 port-name. Concurrency capped at 6 to avoid an ICMP storm
-  // and to keep the spinner moving evenly across the rows.
+  // Probe each unique IPv4 port-name. Concurrency capped at 8 to avoid an ICMP storm
+  // and to keep the spinner moving evenly across the rows. Returns a promise that
+  // resolves once every queued IP has been probed.
   function pingAll() {
-    if (!data) return;
+    if (!data) return Promise.resolve();
     var ips = {};
     (data.printers || []).forEach(function (p) {
       if (p.ip) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
-    if (!queue.length) return;
+    if (!queue.length) return Promise.resolve();
     var i = 0;
     function worker() {
       if (i >= queue.length) return Promise.resolve();
@@ -236,18 +240,20 @@
       });
     }
     var workers = [];
-    for (var k = 0; k < Math.min(6, queue.length); k++) workers.push(worker());
+    for (var k = 0; k < Math.min(8, queue.length); k++) workers.push(worker());
+    return Promise.all(workers);
   }
 
-  // Fetch the printer model from its embedded web UI. Same concurrency cap.
+  // Fetch the printer model. Only ask printers we know are alive (ping returned
+  // true). Skips dead boxes — they'd otherwise eat 5s each for PJL+SNMP+HTTP timeouts.
   function modelsAll() {
     if (!data) return;
     var ips = {};
     (data.printers || []).forEach(function (p) {
-      if (p.ip) ips[p.ip] = true;
+      if (p.ip && pingState[p.ip] === true) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
-    if (!queue.length) return;
+    if (!queue.length) { render(); return; }
     var i = 0;
     function worker() {
       if (i >= queue.length) return Promise.resolve();
@@ -260,7 +266,7 @@
       });
     }
     var workers = [];
-    for (var k = 0; k < Math.min(4, queue.length); k++) workers.push(worker());
+    for (var k = 0; k < Math.min(8, queue.length); k++) workers.push(worker());
   }
 
   api('ping').then(function (r) {

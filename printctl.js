@@ -125,15 +125,18 @@ module.exports.printctl = function (parent) {
 
     function trySnmp(ip, cb) {
         const community = (loadCfg() || {}).snmpCommunity || 'public';
-        const args = ['-v', '2c', '-c', community, '-O', 'qv', '-t', '1', '-r', '1', ip,
+        // Tight SNMP timing: 1s per OID, no retries. Slow printers will lose this race,
+        // but the prior PJL attempt usually answered already; this is just the fallback.
+        const args = ['-v', '2c', '-c', community, '-O', 'qv', '-t', '1', '-r', '0', ip,
                       '1.3.6.1.2.1.25.3.2.1.3.1', '1.3.6.1.2.1.1.1.0'];
-        execFile('snmpget', args, { timeout: 4000, maxBuffer: 64 * 1024 }, (_err, stdout) => {
+        execFile('snmpget', args, { timeout: 2000, maxBuffer: 64 * 1024 }, (_err, stdout) => {
             cb(parseSnmpModel(stdout || ''));
         });
     }
 
     // PJL: send the printer-language standard "INFO ID" query on port 9100.
     // Response looks like: @PJL INFO ID\r\n"HP LaserJet M203dn"\r\n<FF>
+    // Tight timeouts: most printers reply in <300ms. Anything slower is broken.
     function tryPjl(ip, cb) {
         let done = false;
         let buf = '';
@@ -143,14 +146,12 @@ module.exports.printctl = function (parent) {
             try { sock.destroy(); } catch (e) {}
             cb(val || '');
         };
-        const sock = net.connect({ host: ip, port: 9100, timeout: 2500 });
+        const sock = net.connect({ host: ip, port: 9100, timeout: 1500 });
         sock.on('connect', () => {
-            // PJL Universal Exit Language wrapper around the INFO ID command.
             sock.write('\x1b%-12345X@PJL INFO ID\r\n\x1b%-12345X');
         });
         sock.on('data', (chunk) => {
             buf += chunk.toString('utf8');
-            // Most printers reply within a frame; if we have the quoted line we're done.
             const m = buf.match(/"([^"\r\n]{2,80})"/);
             if (m) finish(m[1].trim());
             else if (buf.length > 4096) finish('');
@@ -158,7 +159,7 @@ module.exports.printctl = function (parent) {
         sock.on('end', () => finish((buf.match(/"([^"\r\n]+)"/) || [])[1] || ''));
         sock.on('timeout', () => finish(''));
         sock.on('error', () => finish(''));
-        setTimeout(() => finish(''), 3500);
+        setTimeout(() => finish(''), 2000);
     }
 
     // HTTP fallback: scrape <title> / ProductModel meta. Same single-fire guard
@@ -166,7 +167,7 @@ module.exports.printctl = function (parent) {
     function tryHttp(ip, cb) {
         let done = false;
         const finish = (val) => { if (done) return; done = true; cb(val || ''); };
-        const r = http.get({ host: ip, port: 80, path: '/', timeout: 2500, headers: { 'User-Agent': 'printctl/1.0' } }, (response) => {
+        const r = http.get({ host: ip, port: 80, path: '/', timeout: 1500, headers: { 'User-Agent': 'printctl/1.0' } }, (response) => {
             if (response.statusCode >= 300 && response.statusCode < 400) { response.resume(); return finish(''); }
             let body = '';
             response.on('data', (c) => { if (body.length < 128 * 1024) body += c.toString('utf8'); });
@@ -175,7 +176,7 @@ module.exports.printctl = function (parent) {
         });
         r.on('timeout', () => { try { r.destroy(); } catch (e) {} finish(''); });
         r.on('error', () => finish(''));
-        setTimeout(() => { try { r.destroy(); } catch (e) {} finish(''); }, 3500);
+        setTimeout(() => { try { r.destroy(); } catch (e) {} finish(''); }, 2000);
     }
 
     function extractHtmlModel(html) {
@@ -282,18 +283,18 @@ module.exports.printctl = function (parent) {
                 try { sendJson(res, 200, { ip: ip, model: model || '', via: via }); } catch (e) {}
             };
 
-            // 1) SNMP (snmpget). Fastest, but disabled on some printers.
-            trySnmp(ip, (model) => {
-                if (model) return finish(model, 'snmp');
-                // 2) PJL on port 9100. The print port itself — almost always open.
-                tryPjl(ip, (model2) => {
-                    if (model2) return finish(model2, 'pjl');
+            // 1) PJL on port 9100 — the raw print port, virtually always open.
+            tryPjl(ip, (model) => {
+                if (model) return finish(model, 'pjl');
+                // 2) SNMP. Disabled on some printers but very clean when it works.
+                trySnmp(ip, (model2) => {
+                    if (model2) return finish(model2, 'snmp');
                     // 3) HTTP scrape on port 80. Last resort.
                     tryHttp(ip, (model3) => finish(model3, model3 ? 'http' : 'none'));
                 });
             });
             // Hard ceiling so even a buggy fallback can't hang the response.
-            setTimeout(() => finish('', 'timeout'), 9000);
+            setTimeout(() => finish('', 'timeout'), 6000);
             return;
         }
 
