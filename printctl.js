@@ -96,31 +96,40 @@ module.exports.printctl = function (parent) {
             });
         }
 
-        if (action === 'jobs') {
+        if (action === 'jobs' || action === 'purge') {
             // rpcclient's enumjobs is broken with modern Windows print servers
             // (DOS 0x8001011b on every call), so we shell out to a small Python helper
-            // that queries Win32_PrintJob via WMI through impacket instead.
+            // that queries (or deletes) Win32_PrintJob via WMI through impacket instead.
             const cfg = loadCfg();
             if (!cfg) return sendJson(res, 500, { error: 'printer-config.json manquant' });
             const raw = String(req.query.printer || '').trim();
-            // Take just the short name (last UNC segment); Win32_PrintJob.Name uses
-            // "PrinterShortName, JobId" so a substring match is enough.
             const printer = raw.replace(/^\\+[^\\]+\\+/, '').replace(/^\\+/, '');
             if (!printer || /["\r\n`$;|&<>]/.test(printer)) return sendJson(res, 400, { error: 'nom imprimante invalide' });
+            const mode = action === 'purge' ? 'purge' : 'list';
             const script = path.join(__dirname, 'wmi_print_jobs.py');
-            execFile('python3', [script, cfg.host, cfg.user, cfg.password, cfg.domain || '', printer],
-                { timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+            execFile('python3', [script, mode, cfg.host, cfg.user, cfg.password, cfg.domain || '', printer],
+                { timeout: 30000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
                     if (err && !stdout) {
                         return sendJson(res, 500, { error: (stderr || err.message || 'wmi failed').split('\n')[0] });
                     }
                     try {
                         const obj = JSON.parse(stdout.trim().split('\n').pop());
-                        sendJson(res, 200, obj.error ? obj : { printer: printer, jobs: obj.jobs || [] });
+                        sendJson(res, 200, obj);
                     } catch (e) {
                         sendJson(res, 500, { error: 'invalid WMI output: ' + stdout.slice(0, 200) });
                     }
                 });
             return;
+        }
+
+        if (action === 'pingPrinter') {
+            // Linux `ping -c1 -W1 <ip>` returns rc=0 if alive. Accept only dotted-quad
+            // input — ports like "WSD-…uuid" are not pingable and the UI passes "" for them.
+            const ip = String(req.query.ip || '').trim();
+            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
+            return execFile('ping', ['-c', '1', '-W', '1', ip], (err) => {
+                sendJson(res, 200, { ip: ip, alive: !err });
+            });
         }
 
         // Default (no `action`): render the plugin's handlebars view.

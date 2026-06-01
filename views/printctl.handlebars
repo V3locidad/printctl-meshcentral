@@ -25,6 +25,11 @@
   .badge.status { background: #d1ecf1; color: #0c5460; }
   .mono { font-family: Menlo, Consolas, monospace; font-size: 12px; color: #555; }
   .empty { color: #aaa; font-style: italic; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; vertical-align: middle; margin-right: 6px; }
+  .dot.unknown { background: #ccc; }
+  .dot.alive { background: #2ecc71; }
+  .dot.dead { background: #e74c3c; }
+  button.danger { background: #e74c3c; color: white; border-color: #c0392b; }
   tr.printer { cursor: pointer; }
   tr.printer:hover { background: #f8f8ff; }
   tr.printer.selected { background: #eef6ff; }
@@ -69,6 +74,7 @@
   <h3>
     File d'attente — <span id="jobsTitle"></span>
     <span style="flex:1"></span>
+    <button id="jobsPurge" class="danger">Vider la file</button>
     <button id="jobsRefresh">Rafraîchir</button>
     <button id="jobsClose">Fermer</button>
   </h3>
@@ -97,6 +103,16 @@
 
   var data = null;
   var selectedPrinter = null;
+  // ip -> true/false. undefined means we haven't probed yet (grey dot).
+  var pingState = {};
+
+  function dotClass(ip) {
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip || '')) return 'unknown';
+    var s = pingState[ip];
+    if (s === true) return 'alive';
+    if (s === false) return 'dead';
+    return 'unknown';
+  }
 
   function render() {
     if (!data) return;
@@ -118,8 +134,11 @@
       var jobBadge = p.cjobs > 0
         ? '<span class="badge jobs">' + p.cjobs + ' job' + (p.cjobs > 1 ? 's' : '') + '</span>'
         : '<span class="badge idle">vide</span>';
+      var dotTitle = pingState[p.portname] === true ? 'En ligne'
+                   : pingState[p.portname] === false ? 'Hors ligne'
+                   : 'Statut inconnu';
       return '<tr class="printer' + sel + '" data-name="' + escapeHtml(shortName) + '">'
-           +   '<td><b>' + escapeHtml(shortName) + '</b>'
+           +   '<td><span class="dot ' + dotClass(p.portname) + '" title="' + dotTitle + '"></span><b>' + escapeHtml(shortName) + '</b>'
            +     '<div class="mono">' + escapeHtml(p.printername) + '</div>'
            +   '</td>'
            +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
@@ -184,10 +203,36 @@
       $('cfgState').textContent = (r.printers ? r.printers.length : 0) + ' imprimantes';
       $('cfgState').className = 'pill ok';
       render();
+      pingAll();
     }).catch(function () {
       $('cfgState').textContent = 'endpoint injoignable';
       $('cfgState').className = 'pill bad';
     });
+  }
+
+  // Probe each unique IPv4 port-name. Concurrency capped at 6 to avoid an ICMP storm
+  // and to keep the spinner moving evenly across the rows.
+  function pingAll() {
+    if (!data) return;
+    var ips = {};
+    (data.printers || []).forEach(function (p) {
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(p.portname || '')) ips[p.portname] = true;
+    });
+    var queue = Object.keys(ips);
+    if (!queue.length) return;
+    var i = 0;
+    function worker() {
+      if (i >= queue.length) return Promise.resolve();
+      var ip = queue[i++];
+      return api('pingPrinter', { ip: ip }).then(function (r) {
+        if (r && typeof r.alive === 'boolean') pingState[ip] = r.alive;
+      }).catch(function () {}).then(function () {
+        render();
+        return worker();
+      });
+    }
+    var workers = [];
+    for (var k = 0; k < Math.min(6, queue.length); k++) workers.push(worker());
   }
 
   api('ping').then(function (r) {
@@ -197,6 +242,20 @@
   $('refreshBtn').onclick = load;
   $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter); };
   $('jobsClose').onclick = function () { $('jobsPanel').style.display = 'none'; selectedPrinter = null; render(); };
+  $('jobsPurge').onclick = function () {
+    if (!selectedPrinter) return;
+    if (!confirm('Vider TOUTE la file d\'attente de ' + selectedPrinter + ' ?\n\nLes jobs en cours seront supprimés sur le serveur d\'impression.')) return;
+    $('jobsPurge').disabled = true;
+    $('jobsPurge').textContent = 'Suppression…';
+    api('purge', { printer: selectedPrinter }).then(function (r) {
+      $('jobsPurge').disabled = false;
+      $('jobsPurge').textContent = 'Vider la file';
+      if (r.error) { alert('Erreur: ' + r.error); return; }
+      alert(r.deleted + ' job(s) supprimé(s)' + (r.failed ? ', ' + r.failed + ' échec(s)' : ''));
+      openJobs(selectedPrinter);
+      load();  // refresh the main list so cjobs badges update
+    });
+  };
   load();
 </script>
 </body>

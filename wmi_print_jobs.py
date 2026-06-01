@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
 """
-Query Win32_PrintJob on a Windows print server via WMI (impacket).
-Usage: wmi_print_jobs.py HOST USER PASSWORD DOMAIN [PRINTER_NAME_FILTER]
-Outputs a JSON line: {"jobs": [...]} or {"error": "..."}.
+Query / purge Win32_PrintJob on a Windows print server via WMI (impacket).
+
+Usage:
+  wmi_print_jobs.py list   HOST USER PASS DOMAIN [PRINTER]
+  wmi_print_jobs.py purge  HOST USER PASS DOMAIN PRINTER
+
+Outputs a single JSON line on stdout: {"jobs": [...]} or {"deleted": N} or {"error": "..."}.
 """
 
 import sys
 import json
 import traceback
 
+
 def emit(payload):
     sys.stdout.write(json.dumps(payload))
     sys.stdout.write('\n')
 
+
 def main():
-    if len(sys.argv) < 5:
-        emit({"error": "usage: HOST USER PASSWORD DOMAIN [PRINTER]"})
+    if len(sys.argv) < 6:
+        emit({"error": "usage: <list|purge> HOST USER PASS DOMAIN [PRINTER]"})
         sys.exit(2)
-    host, user, password, domain = sys.argv[1:5]
-    printer_filter = (sys.argv[5] if len(sys.argv) > 5 else '').strip()
+    mode = sys.argv[1]
+    host, user, password, domain = sys.argv[2:6]
+    printer_filter = (sys.argv[6] if len(sys.argv) > 6 else '').strip()
+
+    if mode == 'purge' and not printer_filter:
+        emit({"error": "purge requires a printer name"})
+        sys.exit(2)
 
     try:
         from impacket.dcerpc.v5.dcomrt import DCOMConnection
@@ -40,44 +51,65 @@ def main():
                "TotalPages, Size, TimeSubmitted, Name FROM Win32_PrintJob")
         iEnum = iWbemServices.ExecQuery(wql)
 
+        def g(rec, k):
+            v = rec.get(k, {})
+            if isinstance(v, dict):
+                v = v.get('value', '')
+            return '' if v is None else str(v)
+
         jobs = []
+        targets = []
         while True:
             try:
                 pEnum = iEnum.Next(0xffffffff, 1)[0]
             except Exception:
                 break
             rec = pEnum.getProperties()
-            def g(k):
-                v = rec.get(k, {})
-                if isinstance(v, dict):
-                    v = v.get('value', '')
-                return '' if v is None else str(v)
-
-            name = g('Name')  # "PrinterName, JobId"
+            name = g(rec, 'Name')  # "PrinterShortName, JobId"
             if printer_filter and printer_filter.lower() not in name.lower():
                 continue
 
             jobs.append({
-                "jobid": g('JobId'),
-                "document": g('Document'),
-                "owner": g('Owner'),
-                "jobstatus": g('JobStatus'),
-                "status": g('Status'),
-                "pagesprinted": g('PagesPrinted'),
-                "totalpages": g('TotalPages'),
-                "size": g('Size'),
-                "submitted": g('TimeSubmitted'),
+                "jobid": g(rec, 'JobId'),
+                "document": g(rec, 'Document'),
+                "owner": g(rec, 'Owner'),
+                "jobstatus": g(rec, 'JobStatus'),
+                "status": g(rec, 'Status'),
+                "pagesprinted": g(rec, 'PagesPrinted'),
+                "totalpages": g(rec, 'TotalPages'),
+                "size": g(rec, 'Size'),
+                "submitted": g(rec, 'TimeSubmitted'),
                 "name": name,
             })
+            if mode == 'purge':
+                targets.append(pEnum)
 
-        emit({"jobs": jobs})
+        if mode == 'list':
+            emit({"jobs": jobs})
+            return
+
+        # purge: invoke Delete() on each matching job. Errors per-job are tolerated;
+        # we keep going and report a summary so partial cleanup still helps.
+        deleted = 0
+        failed = []
+        for obj in targets:
+            try:
+                obj.Delete_()
+                deleted += 1
+            except Exception as e:
+                failed.append(str(e))
+        emit({"deleted": deleted, "failed": len(failed), "errors": failed[:5]})
+
     except Exception as e:
         emit({"error": str(e), "trace": traceback.format_exc().splitlines()[-1]})
         sys.exit(1)
     finally:
         if dcom is not None:
-            try: dcom.disconnect()
-            except Exception: pass
+            try:
+                dcom.disconnect()
+            except Exception:
+                pass
+
 
 if __name__ == '__main__':
     main()
