@@ -182,6 +182,11 @@
         $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
         return;
       }
+      // The live result is the most accurate count we'll ever have for this
+      // printer — update the badge from it (snapshots from countsAll can be
+      // minutes stale).
+      jobCountState[(host || '') + '|' + name] = (r.jobs || []).length;
+      render();
       if (!r.jobs || !r.jobs.length) {
         $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">File vide.</td></tr>';
         return;
