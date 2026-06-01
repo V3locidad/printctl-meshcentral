@@ -19,21 +19,12 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { padding: 6px 10px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
   th { background: #fafafa; font-weight: 600; position: sticky; top: 0; z-index: 1; }
-  tr.printer { cursor: pointer; }
-  tr.printer:hover { background: #f8f8ff; }
-  tr.printer.selected { background: #eef6ff; }
   .badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; }
   .badge.jobs { background: #fff3cd; color: #856404; }
   .badge.idle { background: #e2e3e5; color: #383d41; }
   .badge.status { background: #d1ecf1; color: #0c5460; }
   .mono { font-family: Menlo, Consolas, monospace; font-size: 12px; color: #555; }
   .empty { color: #aaa; font-style: italic; }
-  #jobsPanel { margin-top: 10px; flex: 0 0 auto; border: 1px solid #ddd; border-radius: 4px; max-height: 280px; display: flex; flex-direction: column; }
-  #jobsPanel h3 { margin: 0; padding: 8px; background: #eee; font-size: 13px; display: flex; align-items: center; gap: 8px; }
-  #jobsWrap { flex: 1 1 auto; overflow: auto; }
-  #jobsTable { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #jobsTable th, #jobsTable td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; }
-  #jobsTable th { background: #fafafa; position: sticky; top: 0; }
 </style>
 </head>
 <body>
@@ -65,21 +56,6 @@
   </table>
 </div>
 
-<div id="jobsPanel" style="display:none">
-  <h3>
-    File d'attente — <span id="jobsTitle"></span>
-    <span style="flex:1"></span>
-    <button id="jobsRefresh">Rafraîchir</button>
-    <button id="jobsClose">Fermer</button>
-  </h3>
-  <div id="jobsWrap">
-    <table id="jobsTable">
-      <thead><tr><th>ID</th><th>Utilisateur</th><th>Document</th><th>État</th><th>Pages</th><th>Taille</th><th>Soumis</th></tr></thead>
-      <tbody id="jobsBody"></tbody>
-    </table>
-  </div>
-</div>
-
 <script>
   function $(id) { return document.getElementById(id); }
   function api(action, params) {
@@ -96,7 +72,6 @@
   }
 
   var data = null;
-  var selectedPrinter = null;
 
   function render() {
     if (!data) return;
@@ -110,14 +85,16 @@
       $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
       return;
     }
+    // The short name (last UNC segment) is what users actually recognise; the full
+    // \\host\name path is shown as subtitle in case someone needs to copy-paste it.
     $('tbody').innerHTML = rows.map(function (p) {
-      var sel = (selectedPrinter === p.printername) ? ' selected' : '';
+      var shortName = (p.printername || '').split('\\').pop();
       var jobBadge = p.cjobs > 0
         ? '<span class="badge jobs">' + p.cjobs + ' job' + (p.cjobs > 1 ? 's' : '') + '</span>'
         : '<span class="badge idle">vide</span>';
-      return '<tr class="printer' + sel + '" data-name="' + escapeHtml(p.printername) + '">'
-           +   '<td><b>' + escapeHtml(p.printername) + '</b>'
-           +     (p.comment ? '<div class="mono">' + escapeHtml(p.comment) + '</div>' : '')
+      return '<tr>'
+           +   '<td><b>' + escapeHtml(shortName) + '</b>'
+           +     '<div class="mono">' + escapeHtml(p.printername) + '</div>'
            +   '</td>'
            +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
            +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
@@ -126,39 +103,6 @@
            +   '<td>' + jobBadge + '</td>'
            + '</tr>';
     }).join('');
-    [].slice.call(document.querySelectorAll('tr.printer')).forEach(function (tr) {
-      tr.onclick = function () { openJobs(tr.getAttribute('data-name')); };
-    });
-  }
-
-  function openJobs(name) {
-    selectedPrinter = name;
-    render();
-    $('jobsPanel').style.display = '';
-    $('jobsTitle').textContent = name;
-    $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
-    api('jobs', { printer: name }).then(function (r) {
-      if (r.error) {
-        $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
-        return;
-      }
-      if (!r.jobs || !r.jobs.length) {
-        $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">File vide.</td></tr>';
-        return;
-      }
-      $('jobsBody').innerHTML = r.jobs.map(function (j) {
-        var pages = (j.pagesprinted || '0') + ' / ' + (j.totalpages || '?');
-        return '<tr>'
-             +   '<td class="mono">' + escapeHtml(j.jobid) + '</td>'
-             +   '<td>' + escapeHtml(j.username || '') + '</td>'
-             +   '<td>' + escapeHtml(j.document || '') + '</td>'
-             +   '<td>' + escapeHtml(j.status || '') + '</td>'
-             +   '<td>' + escapeHtml(pages) + '</td>'
-             +   '<td>' + escapeHtml(j.size || '') + '</td>'
-             +   '<td class="mono">' + escapeHtml(j.submitted || '') + '</td>'
-             + '</tr>';
-      }).join('');
-    });
   }
 
   function load() {
@@ -185,8 +129,6 @@
   });
   $('search').oninput = render;
   $('refreshBtn').onclick = load;
-  $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter); };
-  $('jobsClose').onclick = function () { $('jobsPanel').style.display = 'none'; selectedPrinter = null; render(); };
   load();
 </script>
 </body>

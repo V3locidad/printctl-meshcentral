@@ -1,9 +1,9 @@
 {
   "name": "printctl",
   "shortName": "printctl",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "author": "V3locidad",
-  "description": "Visualiseur read-only des imprimantes d'un serveur d'impression Windows. Interroge le Print Spooler via RPC (rpcclient). Aucune dépendance à EannaAD ou SYSVOL.",
+  "description": "Inventaire read-only des imprimantes d'un serveur d'impression Windows (nom, partage, IP, driver, localisation, nb de jobs). Interroge le Print Spooler via rpcclient. Pas de détail de file d'attente (limitation Samba rpcclient enumjobs avec Windows récent).",
   "hasAdminPanel": true,
   "homepage": "https://github.com/V3locidad/printctl-meshcentral",
   "changelogUrl": "https://raw.githubusercontent.com/V3locidad/printctl-meshcentral/main/changelog.md",

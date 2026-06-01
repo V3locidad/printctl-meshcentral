@@ -73,26 +73,6 @@ module.exports.printctl = function (parent) {
         return printers;
     }
 
-    // Parse `enumjobs <printer>` output. Same block layout as enumprinters.
-    function parseEnumjobs(stdout) {
-        const blocks = stdout.split(/\n\s*\n/);
-        const jobs = [];
-        const fields = ['jobid', 'printername', 'username', 'document', 'datatype', 'status', 'priority', 'size', 'submitted', 'totalpages', 'pagesprinted'];
-        blocks.forEach((blk) => {
-            const lines = blk.split('\n');
-            const obj = {};
-            let hasAny = false;
-            lines.forEach((line) => {
-                const m = line.match(/^\s*([a-z_]+):\[(.*)\]\s*$/i);
-                if (!m) return;
-                const k = m[1].toLowerCase();
-                if (fields.indexOf(k) !== -1) { obj[k] = m[2]; hasAny = true; }
-            });
-            if (hasAny && obj.jobid) jobs.push(obj);
-        });
-        return jobs;
-    }
-
     obj.server_startup = function () {};
 
     obj.handleAdminReq = function (req, res, user) {
@@ -113,18 +93,6 @@ module.exports.printctl = function (parent) {
             return rpc('enumprinters 2', (err, stdout) => {
                 if (err) return sendJson(res, 500, { error: err.message });
                 sendJson(res, 200, { printers: parseEnumprinters(stdout) });
-            });
-        }
-
-        if (action === 'jobs') {
-            // enumprinters returns UNC paths (\\HOST\NAME) but enumjobs wants just NAME.
-            // Strip the prefix and any surviving backslashes, then reject anything weird.
-            const raw = String(req.query.printer || '').trim();
-            const p = raw.replace(/^\\+[^\\]+\\+/, '').replace(/^\\+/, '');
-            if (!p || /["\r\n`$;|&<>\\]/.test(p)) return sendJson(res, 400, { error: 'nom imprimante invalide: ' + raw });
-            return rpc('enumjobs "' + p + '"', (err, stdout) => {
-                if (err) return sendJson(res, 500, { error: err.message });
-                sendJson(res, 200, { printer: p, jobs: parseEnumjobs(stdout) });
             });
         }
 
