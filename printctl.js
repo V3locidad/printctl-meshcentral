@@ -166,15 +166,20 @@ module.exports.printctl = function (parent) {
             if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
             if (modelCache[ip]) return sendJson(res, 200, { ip: ip, model: modelCache[ip], cached: true });
 
+            // Guard: every error/end path can fire, but the response must be sent
+            // exactly once or Node throws ERR_HTTP_HEADERS_SENT and the worker dies.
+            let answered = false;
             const sendModel = (model) => {
+                if (answered) return;
+                answered = true;
                 if (model) modelCache[ip] = model;
-                sendJson(res, 200, { ip: ip, model: model || '' });
+                try { sendJson(res, 200, { ip: ip, model: model || '' }); } catch (e) {}
             };
 
             const r = http.get({ host: ip, port: 80, path: '/', timeout: 3000, headers: { 'User-Agent': 'printctl/1.0' } }, (response) => {
                 if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
                     response.resume();
-                    return sendModel('');  // don't follow redirects; HP login pages loop forever
+                    return sendModel('');  // don't follow redirects
                 }
                 let body = '';
                 let size = 0;
@@ -187,6 +192,9 @@ module.exports.printctl = function (parent) {
             });
             r.on('timeout', () => { r.destroy(); sendModel(''); });
             r.on('error', () => sendModel(''));
+            // Hard ceiling: belt-and-braces in case the socket goes silent without
+            // emitting 'timeout' (DNS resolver hangs, half-open TCP, etc.).
+            setTimeout(() => { try { r.destroy(); } catch (e) {} sendModel(''); }, 4000);
             return;
         }
 
