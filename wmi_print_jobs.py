@@ -47,8 +47,9 @@ def main():
         iWbemServices = iWbemLevel1Login.NTLMLogin('//./root/cimv2', NULL, NULL)
         iWbemLevel1Login.RemRelease()
 
-        wql = ("SELECT JobId, Document, Owner, JobStatus, Status, PagesPrinted, "
-               "TotalPages, Size, TimeSubmitted, Name FROM Win32_PrintJob")
+        # SELECT * is intentional: SELECT-with-columns omits system properties like
+        # __PATH__, which we need to delete instances via IWbemServices.DeleteInstance.
+        wql = "SELECT * FROM Win32_PrintJob"
         iEnum = iWbemServices.ExecQuery(wql)
 
         def g(rec, k):
