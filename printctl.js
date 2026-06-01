@@ -1,14 +1,14 @@
 /*
- * printctl — Visualiseur read-only des imprimantes déployées par GPO.
- * Lit Imprimantes_Par_OU.json (produit par EannaAD, déposé dans SYSVOL).
- * Aucune écriture : l'édition reste dans EannaAD.
+ * printctl — Visualiseur read-only du serveur d'impression Windows.
+ * Interroge le service Print Spooler via RPC (rpcclient, paquet samba-common-bin).
+ * Aucune écriture sur le serveur. Aucune dépendance à SYSVOL / EannaAD.
  */
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 
 module.exports.printctl = function (parent) {
     const obj = {};
@@ -26,32 +26,66 @@ module.exports.printctl = function (parent) {
         res.status(code || 200).set('Content-Type', 'application/json').send(JSON.stringify(payload));
     }
 
-    function readPrinterJson() {
+    // Run rpcclient against the print server. We pass credentials via -U DOMAIN/user%pass.
+    // Output is parsed line-by-line; rpcclient is the same vintage as Samba 3 so the
+    // format is extremely stable. Timeout caps a stuck spooler from hanging the UI.
+    function rpc(cmd, cb) {
         const cfg = loadCfg();
-        if (!cfg || !cfg.jsonPath) throw new Error('printer-config.json manquant ou jsonPath non défini');
-        const raw = fs.readFileSync(cfg.jsonPath, 'utf8');
-        return JSON.parse(raw);
+        if (!cfg || !cfg.host || !cfg.user || !cfg.password) return cb(new Error('printer-config.json manquant ou incomplet'));
+        const user = (cfg.domain ? cfg.domain + '/' : '') + cfg.user + '%' + cfg.password;
+        const args = ['-U', user, '//' + cfg.host, '-c', cmd];
+        execFile('rpcclient', args, { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+            if (err) return cb(new Error((stderr || err.message).split('\n')[0]));
+            cb(null, stdout);
+        });
     }
 
-    // Translate the raw JSON into a tidy structure for the UI.
-    // The JSON mixes top-level scalars (ServeurImpression, IPServeurImpression) with
-    // per-room objects keyed by room name; we tease them apart here.
-    function parsePrinters(json) {
-        const out = { server: null, ip: null, salles: [] };
-        Object.keys(json).forEach((k) => {
-            const v = json[k];
-            if (k === 'ServeurImpression') { out.server = v; return; }
-            if (k === 'IPServeurImpression') { out.ip = v; return; }
-            if (v && typeof v === 'object') {
-                out.salles.push({
-                    name: k,
-                    eleves: Array.isArray(v.eleves) ? v.eleves : [],
-                    personnels: Array.isArray(v.personnels) ? v.personnels : []
-                });
+    // Parse `enumprinters 2` output. rpcclient emits one printer per blank-line block,
+    // with `key:[value]` lines. We grab the fields we care about.
+    function parseEnumprinters(stdout) {
+        const blocks = stdout.split(/\n\s*\n/);
+        const printers = [];
+        const fields = ['printername', 'sharename', 'portname', 'drivername', 'comment', 'location', 'status', 'cjobs', 'servername', 'printprocessor', 'datatype'];
+        blocks.forEach((blk) => {
+            const lines = blk.split('\n');
+            const obj = {};
+            let hasAny = false;
+            lines.forEach((line) => {
+                const m = line.match(/^\s*([a-z_]+):\[(.*)\]\s*$/i);
+                if (!m) return;
+                const k = m[1].toLowerCase();
+                if (fields.indexOf(k) !== -1) {
+                    obj[k] = m[2];
+                    hasAny = true;
+                }
+            });
+            if (hasAny && obj.printername) {
+                obj.cjobs = parseInt(obj.cjobs, 10) || 0;
+                printers.push(obj);
             }
         });
-        out.salles.sort((a, b) => a.name.localeCompare(b.name, 'fr', { numeric: true }));
-        return out;
+        printers.sort((a, b) => (a.printername || '').localeCompare(b.printername || '', 'fr', { numeric: true }));
+        return printers;
+    }
+
+    // Parse `enumjobs <printer>` output. Same block layout as enumprinters.
+    function parseEnumjobs(stdout) {
+        const blocks = stdout.split(/\n\s*\n/);
+        const jobs = [];
+        const fields = ['jobid', 'printername', 'username', 'document', 'datatype', 'status', 'priority', 'size', 'submitted', 'totalpages', 'pagesprinted'];
+        blocks.forEach((blk) => {
+            const lines = blk.split('\n');
+            const obj = {};
+            let hasAny = false;
+            lines.forEach((line) => {
+                const m = line.match(/^\s*([a-z_]+):\[(.*)\]\s*$/i);
+                if (!m) return;
+                const k = m[1].toLowerCase();
+                if (fields.indexOf(k) !== -1) { obj[k] = m[2]; hasAny = true; }
+            });
+            if (hasAny && obj.jobid) jobs.push(obj);
+        });
+        return jobs;
     }
 
     obj.server_startup = function () {};
@@ -60,33 +94,31 @@ module.exports.printctl = function (parent) {
         const action = (req.query && req.query.action) || '';
 
         if (action === 'ping') {
-            // Smoke test: confirm we can read the JSON and report basic stats.
-            try {
-                const cfg = loadCfg();
-                if (!cfg) return sendJson(res, 200, { ok: false, error: 'printer-config.json manquant' });
-                const parsed = parsePrinters(readPrinterJson());
-                const totalPrinters = parsed.salles.reduce((n, s) => n + s.eleves.length + s.personnels.length, 0);
-                return sendJson(res, 200, { ok: true, jsonPath: cfg.jsonPath, server: parsed.server, ip: parsed.ip, salles: parsed.salles.length, printers: totalPrinters });
-            } catch (e) {
-                return sendJson(res, 200, { ok: false, error: e.message });
-            }
+            // Smoke test: list printers and report the count. Cheapest non-trivial RPC call.
+            const cfg = loadCfg();
+            if (!cfg) return sendJson(res, 200, { ok: false, error: 'printer-config.json manquant' });
+            return rpc('enumprinters 2', (err, stdout) => {
+                if (err) return sendJson(res, 200, { ok: false, host: cfg.host, error: err.message });
+                const printers = parseEnumprinters(stdout);
+                sendJson(res, 200, { ok: true, host: cfg.host, count: printers.length });
+            });
         }
 
         if (action === 'list') {
-            try {
-                return sendJson(res, 200, parsePrinters(readPrinterJson()));
-            } catch (e) {
-                return sendJson(res, 500, { error: e.message });
-            }
+            return rpc('enumprinters 2', (err, stdout) => {
+                if (err) return sendJson(res, 500, { error: err.message });
+                sendJson(res, 200, { printers: parseEnumprinters(stdout) });
+            });
         }
 
-        if (action === 'pingPrinter') {
-            // Linux `ping -c 1 -W 1 <ip>` returns rc=0 if alive. We only accept dotted-quad
-            // input to keep the shell exec safe — IPs come straight from the JSON.
-            const ip = String(req.query.ip || '').trim();
-            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
-            return exec('ping -c 1 -W 1 ' + ip, (err) => {
-                sendJson(res, 200, { ip, alive: !err });
+        if (action === 'jobs') {
+            const p = String(req.query.printer || '').trim();
+            // Allow only printable ASCII for the printer name; rpcclient -c is shell-quoted
+            // by execFile so injection isn't possible, but we still reject garbage.
+            if (!p || /["\r\n`$\\]/.test(p)) return sendJson(res, 400, { error: 'printer invalide' });
+            return rpc('enumjobs "' + p + '"', (err, stdout) => {
+                if (err) return sendJson(res, 500, { error: err.message });
+                sendJson(res, 200, { printer: p, jobs: parseEnumjobs(stdout) });
             });
         }
 

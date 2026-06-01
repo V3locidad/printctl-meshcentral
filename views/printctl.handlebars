@@ -8,32 +8,32 @@
   body { font-family: Segoe UI, Arial, sans-serif; font-size: 13px; padding: 10px; color: #222; box-sizing: border-box; display: flex; flex-direction: column; }
   h2 { margin: 0 0 10px 0; font-size: 16px; flex: 0 0 auto; }
   .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #f4f4f4; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; flex: 0 0 auto; }
-  .bar input[type=text], .bar select { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
+  .bar input[type=text] { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
   button { padding: 5px 10px; border: 1px solid #888; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
   button.primary { background: #2c7be5; color: white; border-color: #2c7be5; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #eee; font-size: 11px; margin-left: 6px; }
   .pill.ok { background: #d4edda; color: #155724; }
   .pill.bad { background: #f8d7da; color: #721c24; }
-  .pill.warn { background: #fff3cd; color: #856404; }
   .content { flex: 1 1 auto; overflow: auto; border: 1px solid #ddd; border-radius: 4px; min-height: 0; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
   th { background: #fafafa; font-weight: 600; position: sticky; top: 0; z-index: 1; }
-  tr.salle { background: #fff; }
-  tr.salle:hover { background: #f8f8ff; }
-  td.profile { width: 50%; }
-  .printerCard { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
-  .printerName { font-weight: 500; }
-  .printerIp { color: #888; font-size: 11px; font-family: Menlo, Consolas, monospace; }
-  .defaultBadge { background: #2c7be5; color: white; font-size: 10px; padding: 1px 5px; border-radius: 8px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
-  .dot.unknown { background: #ccc; }
-  .dot.alive { background: #2ecc71; }
-  .dot.dead { background: #e74c3c; }
-  .empty { color: #aaa; font-style: italic; font-size: 12px; }
-  #cfgState.ok { background: #d4edda; color: #155724; }
-  #cfgState.bad { background: #f8d7da; color: #721c24; }
+  tr.printer { cursor: pointer; }
+  tr.printer:hover { background: #f8f8ff; }
+  tr.printer.selected { background: #eef6ff; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; }
+  .badge.jobs { background: #fff3cd; color: #856404; }
+  .badge.idle { background: #e2e3e5; color: #383d41; }
+  .badge.status { background: #d1ecf1; color: #0c5460; }
+  .mono { font-family: Menlo, Consolas, monospace; font-size: 12px; color: #555; }
+  .empty { color: #aaa; font-style: italic; }
+  #jobsPanel { margin-top: 10px; flex: 0 0 auto; border: 1px solid #ddd; border-radius: 4px; max-height: 280px; display: flex; flex-direction: column; }
+  #jobsPanel h3 { margin: 0; padding: 8px; background: #eee; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  #jobsWrap { flex: 1 1 auto; overflow: auto; }
+  #jobsTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #jobsTable th, #jobsTable td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; }
+  #jobsTable th { background: #fafafa; position: sticky; top: 0; }
 </style>
 </head>
 <body>
@@ -41,11 +41,9 @@
 <h2>Print Control <span id="cfgState" class="pill">checking…</span></h2>
 
 <div class="bar">
-  <strong>Serveur :</strong> <span id="srvName">—</span>
-  <span class="pill" id="srvIp">—</span>
+  <strong>Serveur :</strong> <span id="srvHost" class="mono">—</span>
   <span style="flex:1"></span>
-  <input type="text" id="search" placeholder="Filtrer (salle, imprimante, IP…)" style="width:260px">
-  <button id="pingAllBtn">Tester ping (toutes)</button>
+  <input type="text" id="search" placeholder="Filtrer (nom, partage, IP, driver…)" style="width:280px">
   <button id="refreshBtn" class="primary">Rafraîchir</button>
 </div>
 
@@ -53,15 +51,33 @@
   <table>
     <thead>
       <tr>
-        <th style="width:140px">Salle</th>
-        <th class="profile">Imprimantes — Élèves / Examens / Extérieurs</th>
-        <th class="profile">Imprimantes — Profs / Agents / Administratifs</th>
+        <th>Nom</th>
+        <th>Partage</th>
+        <th>Port / IP</th>
+        <th>Driver</th>
+        <th>Localisation</th>
+        <th>Jobs</th>
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr><td colspan="3" class="empty" style="padding:12px">Chargement…</td></tr>
+      <tr><td colspan="6" class="empty" style="padding:12px">Chargement…</td></tr>
     </tbody>
   </table>
+</div>
+
+<div id="jobsPanel" style="display:none">
+  <h3>
+    File d'attente — <span id="jobsTitle"></span>
+    <span style="flex:1"></span>
+    <button id="jobsRefresh">Rafraîchir</button>
+    <button id="jobsClose">Fermer</button>
+  </h3>
+  <div id="jobsWrap">
+    <table id="jobsTable">
+      <thead><tr><th>ID</th><th>Utilisateur</th><th>Document</th><th>État</th><th>Pages</th><th>Taille</th><th>Soumis</th></tr></thead>
+      <tbody id="jobsBody"></tbody>
+    </table>
+  </div>
 </div>
 
 <script>
@@ -73,126 +89,104 @@
     });
     return fetch('/pluginadmin.ashx?pin=printctl&' + qs, { credentials: 'include' }).then(function (r) { return r.json(); });
   }
-
-  // Cache ping state per IP across renders so we don't lose dots on filter change.
-  var pingState = {};
-  var data = null;
-
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
   }
 
-  function dotClass(ip) {
-    var st = pingState[ip];
-    if (st === true) return 'alive';
-    if (st === false) return 'dead';
-    return 'unknown';
-  }
-
-  function printerHtml(p) {
-    var dot = '<span class="dot ' + dotClass(p.IP) + '" title="' + (pingState[p.IP] === true ? 'En ligne' : pingState[p.IP] === false ? 'Hors ligne' : 'Statut inconnu') + '"></span>';
-    var def = p.Defaut ? '<span class="defaultBadge">défaut</span>' : '';
-    return '<div class="printerCard">'
-         +   dot
-         + '  <span class="printerName">' + escapeHtml(p.Nom) + '</span>'
-         + '  <span class="printerIp">' + escapeHtml(p.IP) + '</span>'
-         +   def
-         + '</div>';
-  }
+  var data = null;
+  var selectedPrinter = null;
 
   function render() {
     if (!data) return;
     var q = ($('search').value || '').toLowerCase().trim();
-    var rows = data.salles.filter(function (s) {
+    var rows = (data.printers || []).filter(function (p) {
       if (!q) return true;
-      if (s.name.toLowerCase().indexOf(q) !== -1) return true;
-      var allPrinters = (s.eleves || []).concat(s.personnels || []);
-      return allPrinters.some(function (p) {
-        return (p.Nom || '').toLowerCase().indexOf(q) !== -1
-            || (p.NomPartage || '').toLowerCase().indexOf(q) !== -1
-            || (p.IP || '').indexOf(q) !== -1;
-      });
+      return [p.printername, p.sharename, p.portname, p.drivername, p.comment, p.location]
+        .some(function (v) { return (v || '').toLowerCase().indexOf(q) !== -1; });
     });
     if (!rows.length) {
-      $('tbody').innerHTML = '<tr><td colspan="3" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
+      $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
       return;
     }
-    $('tbody').innerHTML = rows.map(function (s) {
-      var elevesHtml = s.eleves.length ? s.eleves.map(printerHtml).join('') : '<span class="empty">—</span>';
-      var persoHtml = s.personnels.length ? s.personnels.map(printerHtml).join('') : '<span class="empty">—</span>';
-      return '<tr class="salle">'
-           +   '<td>' + escapeHtml(s.name) + '</td>'
-           +   '<td class="profile">' + elevesHtml + '</td>'
-           +   '<td class="profile">' + persoHtml + '</td>'
+    $('tbody').innerHTML = rows.map(function (p) {
+      var sel = (selectedPrinter === p.printername) ? ' selected' : '';
+      var jobBadge = p.cjobs > 0
+        ? '<span class="badge jobs">' + p.cjobs + ' job' + (p.cjobs > 1 ? 's' : '') + '</span>'
+        : '<span class="badge idle">vide</span>';
+      return '<tr class="printer' + sel + '" data-name="' + escapeHtml(p.printername) + '">'
+           +   '<td><b>' + escapeHtml(p.printername) + '</b>'
+           +     (p.comment ? '<div class="mono">' + escapeHtml(p.comment) + '</div>' : '')
+           +   '</td>'
+           +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
+           +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
+           +   '<td>' + escapeHtml(p.drivername || '') + '</td>'
+           +   '<td>' + escapeHtml(p.location || '') + '</td>'
+           +   '<td>' + jobBadge + '</td>'
            + '</tr>';
     }).join('');
-  }
-
-  function uniqueIps() {
-    var set = {};
-    (data.salles || []).forEach(function (s) {
-      (s.eleves || []).concat(s.personnels || []).forEach(function (p) {
-        if (p.IP) set[p.IP] = true;
-      });
+    [].slice.call(document.querySelectorAll('tr.printer')).forEach(function (tr) {
+      tr.onclick = function () { openJobs(tr.getAttribute('data-name')); };
     });
-    return Object.keys(set);
   }
 
-  function pingAll() {
-    if (!data) return;
-    var ips = uniqueIps();
-    if (!ips.length) return;
-    $('pingAllBtn').disabled = true;
-    $('pingAllBtn').textContent = 'Ping en cours… 0/' + ips.length;
-    var done = 0;
-    // Limit concurrency so we don't ICMP-storm the network. 6 in flight is plenty.
-    var i = 0;
-    function worker() {
-      if (i >= ips.length) return Promise.resolve();
-      var ip = ips[i++];
-      return api('pingPrinter', { ip: ip }).then(function (r) {
-        if (r && typeof r.alive === 'boolean') pingState[ip] = r.alive;
-      }).catch(function () {}).then(function () {
-        done++;
-        $('pingAllBtn').textContent = 'Ping en cours… ' + done + '/' + ips.length;
-        render();
-        return worker();
-      });
-    }
-    var workers = [];
-    for (var k = 0; k < Math.min(6, ips.length); k++) workers.push(worker());
-    Promise.all(workers).then(function () {
-      $('pingAllBtn').disabled = false;
-      $('pingAllBtn').textContent = 'Tester ping (toutes)';
+  function openJobs(name) {
+    selectedPrinter = name;
+    render();
+    $('jobsPanel').style.display = '';
+    $('jobsTitle').textContent = name;
+    $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
+    api('jobs', { printer: name }).then(function (r) {
+      if (r.error) {
+        $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
+        return;
+      }
+      if (!r.jobs || !r.jobs.length) {
+        $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">File vide.</td></tr>';
+        return;
+      }
+      $('jobsBody').innerHTML = r.jobs.map(function (j) {
+        var pages = (j.pagesprinted || '0') + ' / ' + (j.totalpages || '?');
+        return '<tr>'
+             +   '<td class="mono">' + escapeHtml(j.jobid) + '</td>'
+             +   '<td>' + escapeHtml(j.username || '') + '</td>'
+             +   '<td>' + escapeHtml(j.document || '') + '</td>'
+             +   '<td>' + escapeHtml(j.status || '') + '</td>'
+             +   '<td>' + escapeHtml(pages) + '</td>'
+             +   '<td>' + escapeHtml(j.size || '') + '</td>'
+             +   '<td class="mono">' + escapeHtml(j.submitted || '') + '</td>'
+             + '</tr>';
+      }).join('');
     });
   }
 
   function load() {
-    $('tbody').innerHTML = '<tr><td colspan="3" class="empty" style="padding:12px">Chargement…</td></tr>';
+    $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px">Chargement…</td></tr>';
     api('list').then(function (r) {
       if (r.error) {
         $('cfgState').textContent = 'Erreur: ' + r.error;
         $('cfgState').className = 'pill bad';
-        $('tbody').innerHTML = '<tr><td colspan="3" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
+        $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
         return;
       }
       data = r;
-      $('srvName').textContent = r.server || '—';
-      $('srvIp').textContent = r.ip || '—';
-      $('cfgState').textContent = (r.salles ? r.salles.length : 0) + ' salles';
+      $('cfgState').textContent = (r.printers ? r.printers.length : 0) + ' imprimantes';
       $('cfgState').className = 'pill ok';
       render();
-    }).catch(function (e) {
+    }).catch(function () {
       $('cfgState').textContent = 'endpoint injoignable';
       $('cfgState').className = 'pill bad';
     });
   }
 
+  api('ping').then(function (r) {
+    if (r && r.host) $('srvHost').textContent = r.host;
+  });
   $('search').oninput = render;
   $('refreshBtn').onclick = load;
-  $('pingAllBtn').onclick = pingAll;
+  $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter); };
+  $('jobsClose').onclick = function () { $('jobsPanel').style.display = 'none'; selectedPrinter = null; render(); };
   load();
 </script>
 </body>
