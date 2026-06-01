@@ -29,12 +29,17 @@ module.exports.printctl = function (parent) {
         catch (e) { return null; }
     }
 
-    // Normalise the host list. Supports both new ("hosts": [...]) and legacy
-    // ("host": "...") shapes so an old config keeps working without an edit.
+    // Normalise the host list. Accept any of: hosts:[...] / hosts:"..." /
+    // host:[...] / host:"...". Whichever the user wrote, we end up with an array
+    // of bare hostnames or IPs.
     function hostsOf(cfg) {
         if (!cfg) return [];
-        if (Array.isArray(cfg.hosts) && cfg.hosts.length) return cfg.hosts.filter(Boolean);
-        if (cfg.host) return [cfg.host];
+        const raw = (cfg.hosts !== undefined ? cfg.hosts : cfg.host);
+        if (Array.isArray(raw)) return raw.filter(Boolean);
+        if (typeof raw === 'string' && raw.trim()) {
+            // Also split on commas in case someone typed "a,b" as a string.
+            return raw.split(',').map((s) => s.trim()).filter(Boolean);
+        }
         return [];
     }
 
