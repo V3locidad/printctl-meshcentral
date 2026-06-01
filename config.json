@@ -1,7 +1,7 @@
 {
   "name": "printctl",
   "shortName": "printctl",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "author": "V3locidad",
   "description": "Inventaire, statut online/offline, statut détaillé (bourrage/papier/capot…), files d'attente, purge et auto-refresh. Inventaire via rpcclient, jobs/purge via WMI/impacket, modèle/statut via SNMP+PJL.",
   "hasAdminPanel": true,

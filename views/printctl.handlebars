@@ -263,10 +263,16 @@
       // Independently, fetch real job counts per server. cjobs from rpcclient
       // often returns 0 even when WMI sees real queued jobs.
       countsAll();
-      // Kick off the periodic counts refresh (30s). Cleared on each load() so
-      // we never end up with two timers running.
+      // Periodic background refresh every 30s: jobs counts, ping, status.
+      // Models don't change so they stay one-shot. Cleared on each load() so we
+      // never end up with two timers running.
       if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(countsAll, 30000);
+      refreshTimer = setInterval(function () {
+        countsAll();
+        // Re-ping first; statusAll only hits alive printers, so order matters
+        // (a printer that came back online will be re-queried for status too).
+        pingAll().then(statusAll);
+      }, 30000);
     }).catch(function () {
       $('cfgState').textContent = 'endpoint injoignable';
       $('cfgState').className = 'pill bad';
