@@ -1,7 +1,7 @@
 {
   "name": "printctl",
   "shortName": "printctl",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "author": "V3locidad",
   "description": "Visualiseur read-only des imprimantes d'un serveur d'impression Windows. Interroge le Print Spooler via RPC (rpcclient). Aucune dépendance à EannaAD ou SYSVOL.",
   "hasAdminPanel": true,

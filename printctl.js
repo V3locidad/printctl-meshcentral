@@ -35,7 +35,12 @@ module.exports.printctl = function (parent) {
         const user = (cfg.domain ? cfg.domain + '/' : '') + cfg.user + '%' + cfg.password;
         const args = ['-U', user, '//' + cfg.host, '-c', cmd];
         execFile('rpcclient', args, { timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-            if (err) return cb(new Error((stderr || err.message).split('\n')[0]));
+            if (err) {
+                // rpcclient frequently prints the actual cause in stderr; expose more of it
+                // than just the first line so we can debug DOS/permission errors quickly.
+                const msg = (stderr || '').trim() || (err.message || '').trim() || 'rpcclient failed';
+                return cb(new Error(msg.split('\n').slice(0, 3).join(' | ')));
+            }
             cb(null, stdout);
         });
     }
