@@ -61,10 +61,11 @@
         <th>Port / IP</th>
         <th>Modèle</th>
         <th>Localisation</th>
+        <th>Jobs</th>
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr><td colspan="5" class="empty" style="padding:12px">Chargement…</td></tr>
+      <tr><td colspan="6" class="empty" style="padding:12px">Chargement…</td></tr>
     </tbody>
   </table>
 </div>
@@ -124,7 +125,7 @@
         .some(function (v) { return (v || '').toLowerCase().indexOf(q) !== -1; });
     });
     if (!rows.length) {
-      $('tbody').innerHTML = '<tr><td colspan="5" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
+      $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
       return;
     }
     // The short name (last UNC segment) is what users actually recognise; the full
@@ -150,6 +151,9 @@
            +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
            +   '<td>' + modelCell + '</td>'
            +   '<td>' + escapeHtml(p.location || '') + '</td>'
+           +   '<td>' + (p.cjobs > 0
+                         ? '<span class="badge jobs">' + p.cjobs + ' job' + (p.cjobs > 1 ? 's' : '') + '</span>'
+                         : '<span class="badge idle">vide</span>') + '</td>'
            + '</tr>';
     }).join('');
     [].slice.call(document.querySelectorAll('tr.printer')).forEach(function (tr) {
@@ -200,7 +204,7 @@
       if (r.error) {
         $('cfgState').textContent = 'Erreur: ' + r.error;
         $('cfgState').className = 'pill bad';
-        $('tbody').innerHTML = '<tr><td colspan="5" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
+        $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
         return;
       }
       data = r;
