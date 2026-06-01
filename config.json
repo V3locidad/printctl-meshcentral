@@ -1,9 +1,9 @@
 {
   "name": "printctl",
   "shortName": "printctl",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "author": "V3locidad",
-  "description": "Inventaire read-only des imprimantes d'un serveur d'impression Windows (nom, partage, IP, driver, localisation, nb de jobs). Interroge le Print Spooler via rpcclient. Pas de détail de file d'attente (limitation Samba rpcclient enumjobs avec Windows récent).",
+  "description": "Inventaire et files d'attente des imprimantes d'un serveur d'impression Windows. Inventaire via rpcclient (samba-common-bin), files d'attente via WMI/impacket (python3-impacket).",
   "hasAdminPanel": true,
   "homepage": "https://github.com/V3locidad/printctl-meshcentral",
   "changelogUrl": "https://raw.githubusercontent.com/V3locidad/printctl-meshcentral/main/changelog.md",
