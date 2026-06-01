@@ -16,6 +16,12 @@ const { execFile } = require('child_process');
 // Printer web UIs are slow (1-3s each), so re-querying 23 every page load is
 // painful; the model basically never changes anyway.
 const modelCache = {};
+// Supplies (toner/ink/drum etc.) — cached briefly. Levels change with usage,
+// so we cap freshness to 5 minutes and let the UI ask again.
+const suppliesCache = {};
+const SUPPLIES_TTL_MS = 5 * 60 * 1000;
+const statusCache = {};
+const STATUS_TTL_MS = 60 * 1000;
 
 module.exports.printctl = function (parent) {
     const obj = {};
@@ -179,6 +185,76 @@ module.exports.printctl = function (parent) {
         setTimeout(() => { try { r.destroy(); } catch (e) {} finish(''); }, 2000);
     }
 
+    // hrPrinterStatus integer + hrPrinterDetectedErrorState as a hex/octet string
+    // bitmap. We decode the bits we care about; vendor-specific bits past 7 are
+    // ignored to avoid false alarms.
+    function parsePrinterStatus(stdout) {
+        const lines = stdout.split('\n').map((l) => l.replace(/^"|"$/g, '').trim()).filter(Boolean);
+        const STATE = { 1: 'autre', 2: 'inconnu', 3: 'prête', 4: 'imprime', 5: 'préchauffage' };
+        let state = '', stateCode = null;
+        const errors = [];
+        if (lines[0]) {
+            const n = parseInt(lines[0], 10);
+            if (!isNaN(n)) { stateCode = n; state = STATE[n] || ('état ' + n); }
+        }
+        if (lines[1]) {
+            // hrPrinterDetectedErrorState is a binary BITS value. snmpget renders it
+            // either as space-separated hex pairs ("00 ") or as raw bytes. Be tolerant.
+            const hex = lines[1].replace(/[^0-9A-Fa-f]/g, '');
+            if (hex.length >= 2) {
+                const byte = parseInt(hex.slice(0, 2), 16);
+                if (!isNaN(byte)) {
+                    // Bits ordered from MSB per RFC 2790 (bit 0 = 0x80).
+                    const NAMES = ['papier bas', 'pas de papier', 'toner bas', 'plus de toner',
+                                   'capot ouvert', 'bourrage', 'hors ligne', 'service requis'];
+                    for (let i = 0; i < 8; i++) {
+                        if (byte & (0x80 >> i)) errors.push(NAMES[i]);
+                    }
+                }
+            }
+        }
+        return { state: state, stateCode: stateCode, errors: errors };
+    }
+
+    // Parse snmpwalk output for the supplies table. Each row in the table is keyed
+    // by (column.printerMarkerIndex.supplyIndex); we bucket per supplyIndex and
+    // grab description (col 6), type code (col 7), max capacity (col 8) and current
+    // level (col 9). Level codes: -1 unknown, -2 some-present-unknown, -3 no-info.
+    function parseSupplies(stdout) {
+        const TYPE = {
+            1: 'autre', 2: 'inconnu', 3: 'toner', 4: 'récupérateur toner', 5: 'encre',
+            6: 'cart. encre', 7: 'ruban encre', 8: 'récupérateur encre', 9: 'tambour',
+            10: 'développeur', 11: 'huile fuser', 12: 'cire solide', 13: 'ruban cire',
+            14: 'récupérateur cire', 15: 'cire d\'imprimerie', 16: 'nettoyeur fuser',
+            17: 'nettoyeur transfert', 18: 'nettoyeur toner', 19: 'fuser', 20: 'unité corona',
+        };
+        const supplies = {};
+        const re = /43\.11\.1\.1\.(\d+)\.\d+\.(\d+)\s*=\s*\w+:\s*(.+?)\s*$/gm;
+        let m;
+        while ((m = re.exec(stdout)) !== null) {
+            const col = m[1];
+            const idx = m[2];
+            let val = m[3].trim();
+            if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+            if (!supplies[idx]) supplies[idx] = {};
+            if (col === '6') supplies[idx].desc = val;
+            else if (col === '7') supplies[idx].typeCode = parseInt(val, 10);
+            else if (col === '8') supplies[idx].max = parseInt(val, 10);
+            else if (col === '9') supplies[idx].level = parseInt(val, 10);
+        }
+        return Object.keys(supplies).map((k) => {
+            const s = supplies[k];
+            const max = s.max || 0;
+            const level = (s.level == null) ? -1 : s.level;
+            const percent = (max > 0 && level >= 0) ? Math.round(level * 100 / max) : null;
+            return {
+                desc: s.desc || '',
+                type: TYPE[s.typeCode] || ('type ' + (s.typeCode || '?')),
+                max: max, level: level, percent: percent,
+            };
+        }).filter((s) => s.desc);
+    }
+
     function extractHtmlModel(html) {
         if (!html) return '';
         const pick = (re) => { const m = html.match(re); return m ? m[1].replace(/<[^>]+>/g, '').trim() : ''; };
@@ -321,6 +397,46 @@ module.exports.printctl = function (parent) {
             });
             // Hard ceiling so even a buggy fallback can't hang the response.
             setTimeout(() => finish('', 'timeout'), 6000);
+            return;
+        }
+
+        if (action === 'getStatus') {
+            // SNMP get on hrPrinterStatus + hrPrinterDetectedErrorState. The first
+            // tells us idle/printing/warmup; the second is a bitstring of conditions
+            // (paper out, jam, door open, low toner, …).
+            const ip = String(req.query.ip || '').trim();
+            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
+            const cached = statusCache[ip];
+            if (cached && (Date.now() - cached.at) < STATUS_TTL_MS) {
+                return sendJson(res, 200, Object.assign({ ip: ip, cached: true }, cached.data));
+            }
+            const community = (loadCfg() || {}).snmpCommunity || 'public';
+            const args = ['-v', '2c', '-c', community, '-O', 'qv', '-t', '1', '-r', '0', ip,
+                          '1.3.6.1.2.1.25.3.5.1.1.1', '1.3.6.1.2.1.25.3.5.1.2.1'];
+            execFile('snmpget', args, { timeout: 3000, maxBuffer: 16 * 1024 }, (_err, stdout) => {
+                const data = parsePrinterStatus(stdout || '');
+                statusCache[ip] = { at: Date.now(), data: data };
+                sendJson(res, 200, Object.assign({ ip: ip }, data));
+            });
+            return;
+        }
+
+        if (action === 'getSupplies') {
+            // SNMP walk on the Printer-MIB supplies table (1.3.6.1.2.1.43.11.1.1).
+            // Returns descriptions, types, levels and max-capacities per supply.
+            const ip = String(req.query.ip || '').trim();
+            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
+            const cached = suppliesCache[ip];
+            if (cached && (Date.now() - cached.at) < SUPPLIES_TTL_MS) {
+                return sendJson(res, 200, { ip: ip, supplies: cached.supplies, cached: true });
+            }
+            const community = (loadCfg() || {}).snmpCommunity || 'public';
+            const args = ['-v', '2c', '-c', community, '-t', '2', '-r', '0', ip, '1.3.6.1.2.1.43.11.1.1'];
+            execFile('snmpwalk', args, { timeout: 5000, maxBuffer: 256 * 1024 }, (_err, stdout) => {
+                const supplies = parseSupplies(stdout || '');
+                suppliesCache[ip] = { at: Date.now(), supplies: supplies };
+                sendJson(res, 200, { ip: ip, supplies: supplies });
+            });
             return;
         }
 

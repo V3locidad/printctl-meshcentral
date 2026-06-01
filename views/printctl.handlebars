@@ -30,6 +30,11 @@
   .dot.alive { background: #2ecc71; }
   .dot.dead { background: #e74c3c; }
   button.danger { background: #e74c3c; color: white; border-color: #c0392b; }
+  .chip { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin: 1px 2px 1px 0; white-space: nowrap; }
+  .chip.ok   { background: #d4edda; color: #155724; }
+  .chip.warn { background: #fff3cd; color: #856404; }
+  .chip.bad  { background: #f8d7da; color: #721c24; }
+  .chip.na   { background: #e2e3e5; color: #383d41; }
   tr.printer { cursor: pointer; }
   tr.printer:hover { background: #f8f8ff; }
   tr.printer.selected { background: #eef6ff; }
@@ -60,12 +65,13 @@
         <th>Partage</th>
         <th>Port / IP</th>
         <th>Modèle</th>
+        <th>Consommables</th>
         <th>Localisation</th>
         <th>Jobs</th>
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr><td colspan="6" class="empty" style="padding:12px">Chargement…</td></tr>
+      <tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>
     </tbody>
   </table>
 </div>
@@ -109,6 +115,12 @@
   var modelState = {};
   // "host|PrinterShortName" -> live job count from WMI (overrides rpcclient cjobs).
   var jobCountState = {};
+  // ip -> array of {desc,type,level,max,percent} once we've SNMP-walked the supplies.
+  var suppliesState = {};
+  // ip -> {state: "prête"|"imprime"|…, errors: ["bourrage", "papier bas", …]}
+  var statusState = {};
+  // Periodic background refresh for the job-count column.
+  var refreshTimer = null;
 
   function dotClass(ip) {
     if (!ip) return 'unknown';
@@ -116,6 +128,33 @@
     if (s === true) return 'alive';
     if (s === false) return 'dead';
     return 'unknown';
+  }
+
+  // Short label for the supply description — keeps cells compact when the
+  // printer reports verbose names like "Black Toner Cartridge HP 30A".
+  function shortSupply(desc, type) {
+    var s = (desc || '').replace(/cartridge|cart\.?|toner|drum|developer|fuser|unit|imaging|printing|ink/gi, '').trim();
+    s = s.replace(/\s+/g, ' ');
+    if (!s) s = type || '?';
+    if (s.length > 14) s = s.slice(0, 14) + '…';
+    return s;
+  }
+
+  function suppliesHtml(ip, alive) {
+    if (!ip) return '<span class="empty">—</span>';
+    if (alive === false) return '<span class="empty">—</span>';
+    var supplies = suppliesState[ip];
+    if (supplies === undefined) return '<span class="empty">…</span>';
+    if (!supplies.length) return '<span class="empty">N/A</span>';
+    return supplies.map(function (s) {
+      var cls = 'na', label;
+      if (s.percent == null) { label = shortSupply(s.desc, s.type); cls = 'na'; }
+      else {
+        label = shortSupply(s.desc, s.type) + ' ' + s.percent + '%';
+        cls = s.percent <= 10 ? 'bad' : s.percent <= 25 ? 'warn' : 'ok';
+      }
+      return '<span class="chip ' + cls + '" title="' + escapeHtml(s.desc + ' (' + s.type + ')') + '">' + escapeHtml(label) + '</span>';
+    }).join('');
   }
 
   function render() {
@@ -127,7 +166,7 @@
         .some(function (v) { return (v || '').toLowerCase().indexOf(q) !== -1; });
     });
     if (!rows.length) {
-      $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
+      $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
       return;
     }
     // The short name (last UNC segment) is what users actually recognise; the full
@@ -145,13 +184,27 @@
                     : model === undefined ? '<span class="empty">…</span>'
                     : model === '' ? '<span class="empty">inconnu</span>'
                     : escapeHtml(model);
+      // Status badge under the printername — only shown when SNMP reported
+      // something noteworthy (errors, or "imprime" / "préchauffage"). "Prête" is
+      // the boring default and would just add visual noise on every row.
+      var stat = statusState[ip];
+      var statHtml = '';
+      if (stat) {
+        if (stat.errors && stat.errors.length) {
+          statHtml = '<span class="chip bad" style="margin-top:2px" title="Erreurs détectées">⚠ ' + escapeHtml(stat.errors.join(', ')) + '</span>';
+        } else if (stat.state && stat.state !== 'prête' && stat.state !== 'autre' && stat.state !== 'inconnu') {
+          statHtml = '<span class="chip warn" style="margin-top:2px">' + escapeHtml(stat.state) + '</span>';
+        }
+      }
       return '<tr class="printer' + sel + '" data-name="' + escapeHtml(shortName) + '" data-host="' + escapeHtml(p.server || '') + '">'
            +   '<td><span class="dot ' + dotClass(ip) + '" title="' + dotTitle + '"></span><b>' + escapeHtml(shortName) + '</b>'
            +     '<div class="mono">' + escapeHtml(p.printername) + '</div>'
+           +     statHtml
            +   '</td>'
            +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
            +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
            +   '<td>' + modelCell + '</td>'
+           +   '<td>' + suppliesHtml(ip, pingState[ip]) + '</td>'
            +   '<td>' + escapeHtml(p.location || '') + '</td>'
            +   '<td>' + (function () {
                  // Prefer the live WMI count; fall back to the (often-wrong) cjobs
@@ -212,12 +265,12 @@
   }
 
   function load() {
-    $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px">Chargement…</td></tr>';
+    $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
     api('list').then(function (r) {
       if (r.error) {
         $('cfgState').textContent = 'Erreur: ' + r.error;
         $('cfgState').className = 'pill bad';
-        $('tbody').innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
+        $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
         return;
       }
       data = r;
@@ -227,10 +280,14 @@
       // Ping first — we want to know who's alive before bothering with PJL/SNMP/HTTP
       // on dead printers (each method waits its own timeout before giving up, so
       // a single offline machine can cost 5s of wall time for nothing).
-      pingAll().then(modelsAll);
+      pingAll().then(function () { modelsAll(); suppliesAll(); statusAll(); });
       // Independently, fetch real job counts per server. cjobs from rpcclient
       // often returns 0 even when WMI sees real queued jobs.
       countsAll();
+      // Kick off the periodic counts refresh (30s). Cleared on each load() so
+      // we never end up with two timers running.
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(countsAll, 30000);
     }).catch(function () {
       $('cfgState').textContent = 'endpoint injoignable';
       $('cfgState').className = 'pill bad';
@@ -296,6 +353,54 @@
       }).join(' · ');
     }
   });
+  // SNMP get hrPrinterStatus + hrPrinterDetectedErrorState for every alive printer.
+  function statusAll() {
+    if (!data) return;
+    var ips = {};
+    (data.printers || []).forEach(function (p) {
+      if (p.ip && pingState[p.ip] === true) ips[p.ip] = true;
+    });
+    var queue = Object.keys(ips);
+    if (!queue.length) return;
+    var i = 0;
+    function worker() {
+      if (i >= queue.length) return Promise.resolve();
+      var ip = queue[i++];
+      return api('getStatus', { ip: ip }).then(function (r) {
+        if (r) statusState[ip] = { state: r.state || '', errors: r.errors || [] };
+      }).catch(function () {}).then(function () {
+        render();
+        return worker();
+      });
+    }
+    for (var k = 0; k < Math.min(8, queue.length); k++) worker();
+  }
+
+  // SNMP-walk the supplies table for every alive printer. Same concurrency
+  // pattern as modelsAll; skipped for dead boxes (snmpwalk would time out anyway).
+  function suppliesAll() {
+    if (!data) return;
+    var ips = {};
+    (data.printers || []).forEach(function (p) {
+      if (p.ip && pingState[p.ip] === true) ips[p.ip] = true;
+    });
+    var queue = Object.keys(ips);
+    if (!queue.length) { render(); return; }
+    var i = 0;
+    function worker() {
+      if (i >= queue.length) return Promise.resolve();
+      var ip = queue[i++];
+      return api('getSupplies', { ip: ip }).then(function (r) {
+        if (r && Array.isArray(r.supplies)) suppliesState[ip] = r.supplies;
+        else suppliesState[ip] = [];
+      }).catch(function () { suppliesState[ip] = []; }).then(function () {
+        render();
+        return worker();
+      });
+    }
+    for (var k = 0; k < Math.min(8, queue.length); k++) worker();
+  }
+
   // Get the authoritative job counts via WMI, one query per server.
   function countsAll() {
     if (!data) return;
