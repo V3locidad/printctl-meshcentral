@@ -8,7 +8,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const { execFile } = require('child_process');
+
+// Cache model strings per IP for the lifetime of the plugin process.
+// Printer web UIs are slow (1-3s each), so re-querying 23 every page load is
+// painful; the model basically never changes anyway.
+const modelCache = {};
 
 module.exports.printctl = function (parent) {
     const obj = {};
@@ -76,6 +82,32 @@ module.exports.printctl = function (parent) {
         return real;
     }
 
+    // Try a handful of patterns. Order matters: we return the first non-empty hit.
+    // Strings get trimmed and de-genericised (e.g. drop "Status" / "Welcome" / "EWS").
+    function extractModel(html) {
+        if (!html) return '';
+        const tryPick = (re) => {
+            const m = html.match(re);
+            return m ? m[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').trim() : '';
+        };
+        const candidates = [
+            tryPick(/<meta[^>]+name="ProductName"[^>]+content="([^"]+)"/i),
+            tryPick(/id=["']ProductModel["'][^>]*>\s*([^<]+)</i),
+            tryPick(/<title>([^<]+)<\/title>/i),
+            tryPick(/Model\s*:?\s*<[^>]+>\s*([^<]+)</i),
+        ];
+        for (const c of candidates) {
+            if (!c) continue;
+            // Strip the most common boilerplate suffixes/prefixes on the title.
+            let s = c.replace(/^(HP\s+(Embedded\s+)?Web\s+Server\s*[-|]?\s*)/i, '')
+                     .replace(/\s*[-|]\s*(EWS|Status|Welcome|Home|Web Server|Embedded Web Server).*$/i, '')
+                     .replace(/^Welcome\s+to\s+/i, '')
+                     .trim();
+            if (s && s.length > 2 && s.length < 120) return s;
+        }
+        return '';
+    }
+
     obj.server_startup = function () {};
 
     obj.handleAdminReq = function (req, res, user) {
@@ -122,6 +154,39 @@ module.exports.printctl = function (parent) {
                         sendJson(res, 500, { error: 'invalid WMI output: ' + stdout.slice(0, 200) });
                     }
                 });
+            return;
+        }
+
+        if (action === 'getModel') {
+            // Best-effort scrape of the printer's embedded web server. HP, Brother,
+            // Lexmark and most others put the model in <title>; some HP firmwares
+            // expose a ProductModel field in the body. We give up after 3s — these
+            // pages are not standardised and we shouldn't block the UI.
+            const ip = String(req.query.ip || '').trim();
+            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
+            if (modelCache[ip]) return sendJson(res, 200, { ip: ip, model: modelCache[ip], cached: true });
+
+            const sendModel = (model) => {
+                if (model) modelCache[ip] = model;
+                sendJson(res, 200, { ip: ip, model: model || '' });
+            };
+
+            const r = http.get({ host: ip, port: 80, path: '/', timeout: 3000, headers: { 'User-Agent': 'printctl/1.0' } }, (response) => {
+                if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                    response.resume();
+                    return sendModel('');  // don't follow redirects; HP login pages loop forever
+                }
+                let body = '';
+                let size = 0;
+                response.on('data', (chunk) => {
+                    size += chunk.length;
+                    if (size < 200 * 1024) body += chunk.toString('utf8');
+                });
+                response.on('end', () => sendModel(extractModel(body)));
+                response.on('error', () => sendModel(''));
+            });
+            r.on('timeout', () => { r.destroy(); sendModel(''); });
+            r.on('error', () => sendModel(''));
             return;
         }
 
