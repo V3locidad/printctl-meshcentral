@@ -130,14 +130,29 @@
     return 'unknown';
   }
 
-  // Short label for the supply description — keeps cells compact when the
-  // printer reports verbose names like "Black Toner Cartridge HP 30A".
+  // Recognise K/C/M/Y from the description so we display "K 32%" instead of
+  // "Black Toner Cartridge 32%". Falls back to a trimmed label for exotic supplies.
+  function colorLetter(desc) {
+    var d = (desc || '').toLowerCase();
+    if (/\b(black|noir|schwarz|negro|preto)\b/.test(d) || /\bbk\b/.test(d)) return 'K';
+    if (/\b(cyan)\b/.test(d) || /\bc\b/.test(d)) return 'C';
+    if (/\b(magenta)\b/.test(d) || /\bm\b/.test(d)) return 'M';
+    if (/\b(yellow|jaune|gelb|amarillo|amarelo)\b/.test(d) || /\by\b/.test(d)) return 'Y';
+    return null;
+  }
   function shortSupply(desc, type) {
-    var s = (desc || '').replace(/cartridge|cart\.?|toner|drum|developer|fuser|unit|imaging|printing|ink/gi, '').trim();
-    s = s.replace(/\s+/g, ' ');
-    if (!s) s = type || '?';
-    if (s.length > 14) s = s.slice(0, 14) + '…';
-    return s;
+    var c = colorLetter(desc);
+    if (c) return c;
+    if (type && type !== 'autre' && type !== 'inconnu') return type.charAt(0).toUpperCase() + type.slice(1);
+    var s = (desc || '').replace(/\s+/g, ' ').trim();
+    return s.length > 14 ? s.slice(0, 14) + '…' : s;
+  }
+
+  // Keep only the consumables that actually run out and matter day-to-day:
+  // toners, inks. Hide drums, fusers, waste, etc. (they have their own lifecycle
+  // and aren't "out of supply" in the urgent sense).
+  function isPrimarySupply(s) {
+    return s.type === 'toner' || s.type === 'encre' || s.type === 'cart. encre';
   }
 
   function suppliesHtml(ip, alive) {
@@ -146,14 +161,17 @@
     var supplies = suppliesState[ip];
     if (supplies === undefined) return '<span class="empty">…</span>';
     if (!supplies.length) return '<span class="empty">N/A</span>';
-    return supplies.map(function (s) {
-      var cls = 'na', label;
-      if (s.percent == null) { label = shortSupply(s.desc, s.type); cls = 'na'; }
-      else {
-        label = shortSupply(s.desc, s.type) + ' ' + s.percent + '%';
+    var primary = supplies.filter(isPrimarySupply);
+    var shown = primary.length ? primary : supplies;
+    return shown.map(function (s) {
+      var label = shortSupply(s.desc, s.type);
+      var cls = 'na';
+      if (s.percent != null) {
+        label += ' ' + s.percent + '%';
         cls = s.percent <= 10 ? 'bad' : s.percent <= 25 ? 'warn' : 'ok';
       }
-      return '<span class="chip ' + cls + '" title="' + escapeHtml(s.desc + ' (' + s.type + ')') + '">' + escapeHtml(label) + '</span>';
+      var tip = s.desc + ' (' + s.type + ')' + (s.percent != null ? ' — ' + s.percent + '%' : '');
+      return '<span class="chip ' + cls + '" title="' + escapeHtml(tip) + '">' + escapeHtml(label) + '</span>';
     }).join('');
   }
 
