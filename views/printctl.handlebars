@@ -333,9 +333,14 @@
       } else if (r.deleted === 0 && r.matched === 0) {
         msg += '\n\nAucun job trouvé en WMI pour cette imprimante (alors qu\'ils sont dans la file côté serveur). Vérifie le format du nom.';
       }
+      // Optimistic: the purge succeeded, force the badge to "vide" right away so
+      // the UI doesn't lie until the WMI re-count catches up. countsAll() then
+      // confirms from the server.
+      jobCountState[selectedPrinter.host + '|' + selectedPrinter.name] = 0;
+      render();
       alert(msg);
       openJobs(selectedPrinter.name, selectedPrinter.host);
-      load();
+      countsAll();
     });
   };
   load();
