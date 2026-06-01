@@ -58,7 +58,7 @@ def main():
             return '' if v is None else str(v)
 
         jobs = []
-        targets = []
+        target_paths = []
         while True:
             try:
                 pEnum = iEnum.Next(0xffffffff, 1)[0]
@@ -82,22 +82,24 @@ def main():
                 "name": name,
             })
             if mode == 'purge':
-                targets.append(pEnum)
+                # The keyed instance path is what DeleteInstance needs:
+                # \\HOST\root\cimv2:Win32_PrintJob.Name="…"
+                path = g(rec, '__PATH__')
+                if path:
+                    target_paths.append(path)
 
         if mode == 'list':
             emit({"jobs": jobs})
             return
 
-        # purge: invoke Delete() on each matching job. Errors per-job are tolerated;
-        # we keep going and report a summary so partial cleanup still helps.
         deleted = 0
         failed = []
-        for obj in targets:
+        for path in target_paths:
             try:
-                obj.Delete_()
+                iWbemServices.DeleteInstance(path)
                 deleted += 1
             except Exception as e:
-                failed.append(str(e))
+                failed.append({"path": path, "error": str(e)})
         emit({"deleted": deleted, "failed": len(failed), "errors": failed[:5]})
 
     except Exception as e:
