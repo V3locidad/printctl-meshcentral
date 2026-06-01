@@ -251,9 +251,22 @@
       $('jobsPurge').disabled = false;
       $('jobsPurge').textContent = 'Vider la file';
       if (r.error) { alert('Erreur: ' + r.error); return; }
-      alert(r.deleted + ' job(s) supprimé(s)' + (r.failed ? ', ' + r.failed + ' échec(s)' : ''));
+      var msg = r.deleted + ' job(s) supprimé(s)';
+      if (r.failed) {
+        msg += ', ' + r.failed + ' échec(s)';
+        if (r.errors && r.errors.length) {
+          msg += '\n\nPremière erreur: ' + (r.errors[0].error || JSON.stringify(r.errors[0]));
+          if (r.errors[0].path) msg += '\nPath: ' + r.errors[0].path;
+        }
+      } else if (r.deleted === 0 && r.matched > 0) {
+        msg += '\n\n' + r.matched + ' job(s) trouvés mais 0 supprimés.';
+        if (r.paths && r.paths.length) msg += '\nPath testé: ' + r.paths[0];
+      } else if (r.deleted === 0 && r.matched === 0) {
+        msg += '\n\nAucun job trouvé en WMI pour cette imprimante (alors qu\'ils sont dans la file côté serveur). Vérifie le format du nom.';
+      }
+      alert(msg);
       openJobs(selectedPrinter);
-      load();  // refresh the main list so cjobs badges update
+      load();
     });
   };
   load();

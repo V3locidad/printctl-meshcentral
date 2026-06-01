@@ -83,9 +83,13 @@ def main():
                 "name": name,
             })
             if mode == 'purge':
-                # The keyed instance path is what DeleteInstance needs:
-                # \\HOST\root\cimv2:Win32_PrintJob.Name="…"
-                path = g(rec, '__PATH__')
+                # Try the system __PATH__ first; if impacket didn't surface it,
+                # build a relative path from the Name key, which uniquely
+                # identifies a Win32_PrintJob instance ("Printer, JobId").
+                path = g(rec, '__PATH__') or g(rec, '__RELPATH__')
+                if not path and name:
+                    escaped = name.replace('\\', '\\\\').replace('"', '\\"')
+                    path = 'Win32_PrintJob.Name="' + escaped + '"'
                 if path:
                     target_paths.append(path)
 
@@ -101,7 +105,15 @@ def main():
                 deleted += 1
             except Exception as e:
                 failed.append({"path": path, "error": str(e)})
-        emit({"deleted": deleted, "failed": len(failed), "errors": failed[:5]})
+        # Also surface the matched job count and the paths we built so the UI can
+        # explain "0 deleted" when there was nothing to match in the first place.
+        emit({
+            "deleted": deleted,
+            "failed": len(failed),
+            "errors": failed[:5],
+            "matched": len(jobs),
+            "paths": target_paths[:5],
+        })
 
     except Exception as e:
         emit({"error": str(e), "trace": traceback.format_exc().splitlines()[-1]})
