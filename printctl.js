@@ -21,7 +21,7 @@ const modelCache = {};
 const suppliesCache = {};
 const SUPPLIES_TTL_MS = 5 * 60 * 1000;
 const statusCache = {};
-const STATUS_TTL_MS = 60 * 1000;
+const STATUS_TTL_MS = 20 * 1000;
 
 module.exports.printctl = function (parent) {
     const obj = {};
@@ -100,7 +100,8 @@ module.exports.printctl = function (parent) {
                 }
             });
             if (hasAny && obj.printername) {
-                obj.cjobs = parseInt(obj.cjobs, 10) || 0;
+                obj.cjobs = Number(obj.cjobs) || 0;
+                obj.queueStatus = queueStatus(obj.status);
                 printers.push(obj);
             }
         });
@@ -114,12 +115,60 @@ module.exports.printctl = function (parent) {
         return real;
     }
 
+    // PRINTER_INFO_2.Status is a bitmask, printed in hexadecimal by rpcclient.
+    // A zero mask means Windows reports the queue ready, not a network probe.
+    function queueStatus(raw) {
+        const value = String(raw == null ? '' : raw).trim();
+        const code = /^(?:0x[0-9a-f]+|[0-9]+)$/i.test(value) ? Number(value) : NaN;
+        if (!Number.isSafeInteger(code) || code < 0 || code > 0xffffffff) return { known: false, states: [] };
+        const flags = [
+            [0x1, 'Suspendue', 'warn'], [0x2, 'Erreur', 'bad'], [0x4, 'Suppression en cours', 'warn'],
+            [0x8, 'Bourrage', 'bad'], [0x10, 'Pas de papier', 'bad'], [0x20, 'Alimentation manuelle', 'warn'],
+            [0x40, 'Problème de papier', 'bad'], [0x80, 'Hors connexion', 'bad'],
+            [0x100, 'Communication en cours', 'warn'], [0x200, 'Occupée', 'warn'], [0x400, 'Impression', 'warn'],
+            [0x800, 'Bac de sortie plein', 'bad'], [0x1000, 'Indisponible', 'bad'], [0x2000, 'En attente', 'warn'],
+            [0x4000, 'Traitement', 'warn'], [0x8000, 'Initialisation', 'warn'], [0x10000, 'Préchauffage', 'warn'],
+            [0x20000, 'Toner bas', 'warn'], [0x40000, 'Plus de toner', 'bad'], [0x80000, 'Page non imprimable', 'bad'],
+            [0x100000, 'Intervention requise', 'bad'], [0x200000, 'Mémoire insuffisante', 'bad'],
+            [0x400000, 'Capot ouvert', 'bad'], [0x800000, 'État serveur inconnu', 'na'],
+            [0x1000000, 'Veille', 'warn']
+        ];
+        const states = flags.filter((f) => code & f[0]).map((f) => ({ label: f[1], level: f[2] }));
+        if (code === 0) states.push({ label: 'Prête', level: 'ok' });
+        if (code & ~0x1ffffff) states.push({ label: 'Autre état (0x' + code.toString(16) + ')', level: 'na' });
+        return { known: true, code: code, offline: !!(code & 0x80), states: states };
+    }
+
+    // ICMP may be filtered or unavailable on the MeshCentral host. A completed
+    // TCP handshake is additional positive evidence; no print data is sent.
+    // Even when all probes fail, reachability is unknown rather than offline.
+    function probeTcp(ip, port) {
+        return new Promise((resolve) => {
+            let done = false, socket;
+            const timer = setTimeout(() => finish(false), 1800);
+            function finish(alive) {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                if (socket) socket.destroy();
+                resolve(alive);
+            }
+            try {
+                socket = net.connect({ host: ip, port: port });
+                socket.on('connect', () => finish(true));
+                socket.on('error', () => finish(false));
+                socket.on('close', () => finish(false));
+            } catch (e) { finish(false); }
+        });
+    }
+
     // snmpget -O qv emits one quoted value per line. hrDeviceDescr is usually
     // a clean "HP LaserJet M203dn"; sysDescr is the noisy multi-field string
     // ("HP ETHERNET MULTI-ENV,SN:…,PID:HP LaserJet M203dn"). For the latter we
     // try to extract just the model from the PID:/MDL: tag.
     function parseSnmpModel(stdout) {
-        const lines = stdout.split('\n').map((l) => l.replace(/^"|"$/g, '').trim()).filter(Boolean);
+        const lines = stdout.split('\n').map((l) => l.replace(/^"|"$/g, '').trim())
+            .filter((l) => l && !/^(no such|end of mib|timeout|error)/i.test(l));
         for (const line of lines) {
             if (/^no such/i.test(line) || /timeout/i.test(line)) continue;
             const tagged = line.match(/(?:PID|MDL):\s*([^,;]+)/i);
@@ -185,35 +234,38 @@ module.exports.printctl = function (parent) {
         setTimeout(() => { try { r.destroy(); } catch (e) {} finish(''); }, 2000);
     }
 
-    // hrPrinterStatus integer + hrPrinterDetectedErrorState as a hex/octet string
-    // bitmap. We decode the bits we care about; vendor-specific bits past 7 are
-    // ignored to avoid false alarms.
+    // Numeric OIDs and typed values keep SNMP exception text out of the bitmap.
+    // Walk the table: hrDeviceIndex is not necessarily 1. Never merge two devices.
     function parsePrinterStatus(stdout) {
-        const lines = stdout.split('\n').map((l) => l.replace(/^"|"$/g, '').trim()).filter(Boolean);
-        const STATE = { 1: 'autre', 2: 'inconnu', 3: 'prête', 4: 'imprime', 5: 'préchauffage' };
-        let state = '', stateCode = null;
-        const errors = [];
-        if (lines[0]) {
-            const n = parseInt(lines[0], 10);
-            if (!isNaN(n)) { stateCode = n; state = STATE[n] || ('état ' + n); }
+        const entries = {};
+        String(stdout || '').split(/\r?\n/).forEach((line) => {
+            const m = line.match(/^\s*\.?1\.3\.6\.1\.2\.1\.25\.3\.5\.1\.([12])\.(\d+)\s*=\s*(.*?)\s*$/);
+            if (!m) return;
+            const row = entries[m[2]] || (entries[m[2]] = {});
+            row[m[1]] = m[3];
+        });
+        const indexes = Object.keys(entries);
+        const result = { available: false, state: '', stateCode: null, errors: [], errorsKnown: false };
+        if (indexes.length !== 1) return result;
+        const row = entries[indexes[0]];
+        const state = (row[1] || '').match(/^INTEGER:\s*([1-5])$/);
+        if (state) {
+            result.stateCode = Number(state[1]);
+            result.state = { 1: 'autre', 2: 'inconnu', 3: 'prête', 4: 'imprime', 5: 'préchauffage' }[result.stateCode];
         }
-        if (lines[1]) {
-            // hrPrinterDetectedErrorState is a binary BITS value. snmpget renders it
-            // either as space-separated hex pairs ("00 ") or as raw bytes. Be tolerant.
-            const hex = lines[1].replace(/[^0-9A-Fa-f]/g, '');
-            if (hex.length >= 2) {
-                const byte = parseInt(hex.slice(0, 2), 16);
-                if (!isNaN(byte)) {
-                    // Bits ordered from MSB per RFC 2790 (bit 0 = 0x80).
-                    const NAMES = ['papier bas', 'pas de papier', 'toner bas', 'plus de toner',
-                                   'capot ouvert', 'bourrage', 'hors ligne', 'service requis'];
-                    for (let i = 0; i < 8; i++) {
-                        if (byte & (0x80 >> i)) errors.push(NAMES[i]);
-                    }
-                }
-            }
+        // -m '' -Ox forces OCTET STRINGs to hex, including printable bytes.
+        // Do not strip non-hex text: "No Such Instance" is NOT a byte string.
+        const hex = (row[2] || '').match(/^Hex-STRING:\s*([0-9a-f]{2}(?:\s+[0-9a-f]{2})*)$/i);
+        if (hex) {
+            const bytes = hex[1].split(/\s+/).map((v) => parseInt(v, 16));
+            const names = ['papier bas', 'pas de papier', 'toner bas', 'plus de toner',
+                'capot ouvert', 'bourrage', 'hors ligne', 'service requis'];
+            names.forEach((name, bit) => { if (bytes[0] & (0x80 >> bit)) result.errors.push(name); });
+            if (bytes.slice(1).some((v) => v !== 0)) result.errors.push('autre alerte imprimante');
+            result.errorsKnown = true;
         }
-        return { state: state, stateCode: stateCode, errors: errors };
+        result.available = result.stateCode !== null || result.errorsKnown;
+        return result;
     }
 
     // Parse snmpwalk output for the supplies table. Each row in the table is keyed
@@ -401,21 +453,19 @@ module.exports.printctl = function (parent) {
         }
 
         if (action === 'getStatus') {
-            // SNMP get on hrPrinterStatus + hrPrinterDetectedErrorState. The first
-            // tells us idle/printing/warmup; the second is a bitstring of conditions
-            // (paper out, jam, door open, low toner, …).
             const ip = String(req.query.ip || '').trim();
-            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
+            if (net.isIP(ip) !== 4) return sendJson(res, 400, { error: 'IP invalide' });
             const cached = statusCache[ip];
-            if (cached && (Date.now() - cached.at) < STATUS_TTL_MS) {
+            if (req.query.force !== '1' && cached && (Date.now() - cached.at) < STATUS_TTL_MS) {
                 return sendJson(res, 200, Object.assign({ ip: ip, cached: true }, cached.data));
             }
             const community = (loadCfg() || {}).snmpCommunity || 'public';
-            const args = ['-v', '2c', '-c', community, '-O', 'qv', '-t', '1', '-r', '0', ip,
-                          '1.3.6.1.2.1.25.3.5.1.1.1', '1.3.6.1.2.1.25.3.5.1.2.1'];
-            execFile('snmpget', args, { timeout: 3000, maxBuffer: 16 * 1024 }, (_err, stdout) => {
-                const data = parsePrinterStatus(stdout || '');
-                statusCache[ip] = { at: Date.now(), data: data };
+            const args = ['-v', '2c', '-c', community, '-m', '', '-O', 'nex', '-t', '1', '-r', '1', ip,
+                          '1.3.6.1.2.1.25.3.5.1'];
+            execFile('snmpwalk', args, { timeout: 5000, maxBuffer: 32 * 1024 }, (err, stdout) => {
+                const data = parsePrinterStatus(err ? '' : stdout);
+                if (data.available) statusCache[ip] = { at: Date.now(), data: data };
+                else delete statusCache[ip];
                 sendJson(res, 200, Object.assign({ ip: ip }, data));
             });
             return;
@@ -441,13 +491,18 @@ module.exports.printctl = function (parent) {
         }
 
         if (action === 'pingPrinter') {
-            // Linux `ping -c1 -W1 <ip>` returns rc=0 if alive. Accept only dotted-quad
-            // input — ports like "WSD-…uuid" are not pingable and the UI passes "" for them.
             const ip = String(req.query.ip || '').trim();
-            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return sendJson(res, 400, { error: 'IP invalide' });
-            return execFile('ping', ['-c', '1', '-W', '1', ip], (err) => {
-                sendJson(res, 200, { ip: ip, alive: !err });
+            if (net.isIP(ip) !== 4) return sendJson(res, 400, { error: 'IP invalide' });
+            execFile('ping', ['-c', '2', '-W', '1', ip], { timeout: 3500 }, (err) => {
+                if (!err) return sendJson(res, 200, { ip: ip, alive: true, via: 'icmp' });
+                const ports = [9100, 631, 515, 443, 80];
+                Promise.all(ports.map((port) => probeTcp(ip, port))).then((results) => {
+                    const index = results.indexOf(true);
+                    sendJson(res, 200, { ip: ip, alive: index >= 0 ? true : null,
+                        via: index >= 0 ? 'tcp:' + ports[index] : null });
+                });
             });
+            return;
         }
 
         // Default (no `action`): render the plugin's handlebars view.

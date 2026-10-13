@@ -29,6 +29,8 @@
   .dot.unknown { background: #ccc; }
   .dot.alive { background: #2ecc71; }
   .dot.dead { background: #e74c3c; }
+  .dot.warn { background: #d99c18; }
+  .status-detail { display:block; color:#777; font-size:11px; margin-top:3px; }
   button.danger { background: #e74c3c; color: white; border-color: #c0392b; }
   .chip { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin: 1px 2px 1px 0; white-space: nowrap; }
   .chip.ok   { background: #d4edda; color: #155724; }
@@ -109,7 +111,7 @@
 
   var data = null;
   var selectedPrinter = null;
-  // ip -> true/false. undefined means we haven't probed yet (grey dot).
+  // ip -> true when reachable, null when unconfirmed, undefined while probing.
   var pingState = {};
   // ip -> model string (or "" once we know there is none).
   var modelState = {};
@@ -119,34 +121,49 @@
   var statusState = {};
   // Periodic background refresh for the job-count column.
   var refreshTimer = null;
+  var loadBusy = false;
 
-  function dotClass(ip) {
-    if (!ip) return 'unknown';
-    var s = pingState[ip];
-    if (s === true) return 'alive';
-    if (s === false) return 'dead';
-    return 'unknown';
+  function printerIndicator(p) {
+    var queue = p.queueStatus;
+    if (queue && queue.known) {
+      var levels = queue.states.map(function (s) { return s.level; });
+      return { css: levels.indexOf('bad') !== -1 ? 'dead' : levels.indexOf('warn') !== -1 ? 'warn' : levels.indexOf('na') !== -1 ? 'unknown' : 'alive',
+        title: 'Windows : ' + queue.states.map(function (s) { return s.label; }).join(', ') };
+    }
+    var snmp = statusState[p.ip];
+    if (snmp && snmp.available && snmp.errors.length) return { css: 'warn', title: 'Alerte signalée par SNMP' };
+    return pingState[p.ip] === true || (snmp && snmp.available)
+      ? { css: 'alive', title: 'Joignable depuis MeshCentral ; état Windows inconnu' }
+      : { css: 'unknown', title: 'État non confirmé' };
   }
 
-  // What goes in the "Statut" column. We surface, in this order:
-  //   - SNMP-reported errors (jam, no paper, cover open, …)  → red chips
-  //   - Activity state (printing, warming up)                 → yellow chip
-  //   - "OK" (or "Prête")                                     → green chip
-  //   - "…" while the status query is still in flight
-  function statusHtml(ip, alive) {
-    if (!ip) return '<span class="empty">—</span>';
-    if (alive === false) return '<span class="empty">—</span>';
-    var s = statusState[ip];
-    if (s === undefined) return '<span class="empty">…</span>';
-    if (s.errors && s.errors.length) {
-      return s.errors.map(function (e) {
-        return '<span class="chip bad">⚠ ' + escapeHtml(e) + '</span>';
+  // The Windows queue, direct network access and SNMP are different observations.
+  // Label each source and never turn a failed probe into an offline/OK assertion.
+  function statusHtml(p) {
+    var html = '';
+    var queue = p.queueStatus;
+    if (queue && queue.known) {
+      html = queue.states.map(function (s) {
+        var level = ['ok', 'warn', 'bad', 'na'].indexOf(s.level) !== -1 ? s.level : 'na';
+        return '<span class="chip ' + level + '">Windows : ' + escapeHtml(s.label) + '</span>';
       }).join('');
-    }
-    if (s.state && s.state !== 'prête' && s.state !== 'autre' && s.state !== 'inconnu' && s.state !== '') {
-      return '<span class="chip warn">' + escapeHtml(s.state) + '</span>';
-    }
-    return '<span class="chip ok">OK</span>';
+    } else html = '<span class="chip na">État Windows inconnu</span>';
+    var ip = p.ip;
+    if (!ip) return html + '<span class="status-detail">Adresse IP non identifiée</span>';
+    var s = statusState[ip];
+    if (s && s.available) {
+      if (s.errors.length) {
+        html += s.errors.map(function (e) {
+          return '<span class="chip bad">SNMP : ' + escapeHtml(e) + '</span>';
+        }).join('');
+      } else if (s.stateCode >= 3 && s.errorsKnown) {
+        html += '<span class="chip ' + (s.stateCode === 3 ? 'ok' : 'warn') + '">SNMP : ' + escapeHtml(s.state) + '</span>';
+      } else html += '<span class="status-detail">État SNMP incomplet</span>';
+    } else if (s !== undefined) html += '<span class="status-detail">État SNMP indisponible</span>';
+    var reachable = pingState[ip] === true || (s && s.available);
+    html += '<span class="status-detail">' + (reachable ? 'Joignable depuis MeshCentral'
+      : pingState[ip] === undefined ? 'Vérification réseau…' : 'Accès direct non confirmé') + '</span>';
+    return html;
   }
 
   function render() {
@@ -167,23 +184,19 @@
       var shortName = (p.printername || '').split('\\').pop();
       var sel = (selectedPrinter && selectedPrinter.name === shortName && selectedPrinter.host === p.server) ? ' selected' : '';
       var ip = p.ip || '';
-      var dotTitle = pingState[ip] === true ? 'En ligne'
-                   : pingState[ip] === false ? 'Hors ligne'
-                   : 'Statut inconnu';
+      var indicator = printerIndicator(p);
       var model = modelState[ip];
-      var modelCell = !ip ? '<span class="empty">—</span>'
-                    : pingState[ip] === false ? '<span class="empty">hors ligne</span>'
-                    : model === undefined ? '<span class="empty">…</span>'
-                    : model === '' ? '<span class="empty">inconnu</span>'
-                    : escapeHtml(model);
+      var modelCell = model ? escapeHtml(model)
+        : p.drivername ? escapeHtml(p.drivername) + '<span class="status-detail">Pilote Windows</span>'
+        : '<span class="empty">Modèle inconnu</span>';
       return '<tr class="printer' + sel + '" data-name="' + escapeHtml(shortName) + '" data-host="' + escapeHtml(p.server || '') + '">'
-           +   '<td><span class="dot ' + dotClass(ip) + '" title="' + dotTitle + '"></span><b>' + escapeHtml(shortName) + '</b>'
+           +   '<td><span class="dot ' + indicator.css + '" title="' + escapeHtml(indicator.title) + '"></span><b>' + escapeHtml(shortName) + '</b>'
            +     '<div class="mono">' + escapeHtml(p.printername) + '</div>'
            +   '</td>'
            +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
            +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
            +   '<td>' + modelCell + '</td>'
-           +   '<td>' + statusHtml(ip, pingState[ip]) + '</td>'
+           +   '<td>' + statusHtml(p) + '</td>'
            +   '<td>' + escapeHtml(p.location || '') + '</td>'
            +   '<td>' + (function () {
                  // Prefer the live WMI count; fall back to the (often-wrong) cjobs
@@ -243,43 +256,39 @@
     });
   }
 
-  function load() {
-    $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
-    api('list').then(function (r) {
-      if (r.error) {
-        $('cfgState').textContent = 'Erreur: ' + r.error;
-        $('cfgState').className = 'pill bad';
-        $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
-        return;
-      }
+  function load(manual) {
+    if (loadBusy) return Promise.resolve();
+    loadBusy = true;
+    $('refreshBtn').disabled = true;
+    if (!data) $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
+    return api('list').then(function (r) {
+      if (!r || r.error || !Array.isArray(r.printers)) throw new Error(r && r.error || 'Inventaire invalide');
       data = r;
-      $('cfgState').textContent = (r.printers ? r.printers.length : 0) + ' imprimantes';
-      $('cfgState').className = 'pill ok';
+      pingState = {};
+      statusState = {};
+      var errors = (r.errors || []).map(function (e) { return e.host + ' : ' + e.error; });
+      $('cfgState').textContent = r.printers.length + ' imprimantes' + (errors.length ? ' · Inventaire partiel : ' + errors.join(' · ') : '');
+      $('cfgState').className = errors.length ? 'pill bad' : 'pill ok';
       render();
-      // Ping first — we want to know who's alive before bothering with PJL/SNMP/HTTP
-      // on dead printers (each method waits its own timeout before giving up, so
-      // a single offline machine can cost 5s of wall time for nothing).
-      pingAll().then(function () { modelsAll(); statusAll(); });
-      // Independently, fetch real job counts per server. cjobs from rpcclient
-      // often returns 0 even when WMI sees real queued jobs.
-      countsAll();
-      // Periodic background refresh every 30s: jobs counts, ping, status.
-      // Models don't change so they stay one-shot. Cleared on each load() so we
-      // never end up with two timers running.
-      if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(function () {
-        countsAll();
-        // Re-ping first; statusAll only hits alive printers, so order matters
-        // (a printer that came back online will be re-queried for status too).
-        pingAll().then(statusAll);
-      }, 30000);
-    }).catch(function () {
-      $('cfgState').textContent = 'endpoint injoignable';
+      // Do not gate SNMP or model detection on ICMP. All workers are bounded;
+      // wait for them before allowing the next refresh to overwrite their results.
+      return Promise.all([pingAll(), modelsAll(), statusAll(manual !== false), countsAll()]);
+    }).catch(function (e) {
+      $('cfgState').textContent = 'Actualisation impossible : ' + e.message;
       $('cfgState').className = 'pill bad';
+      if (data) {
+        // A stale Windows state is not evidence of current availability.
+        data.printers.forEach(function (p) { p.queueStatus = { known: false }; });
+        pingState = {}; statusState = {};
+        render();
+      }
+    }).then(function () {
+      loadBusy = false;
+      $('refreshBtn').disabled = false;
     });
   }
 
-  // Probe each unique IPv4 port-name. Concurrency capped at 8 to avoid an ICMP storm
+  // Probe each unique IPv4 port-name. Concurrency capped at 8
   // and to keep the spinner moving evenly across the rows. Returns a promise that
   // resolves once every queued IP has been probed.
   function pingAll() {
@@ -295,8 +304,8 @@
       if (i >= queue.length) return Promise.resolve();
       var ip = queue[i++];
       return api('pingPrinter', { ip: ip }).then(function (r) {
-        if (r && typeof r.alive === 'boolean') pingState[ip] = r.alive;
-      }).catch(function () {}).then(function () {
+        pingState[ip] = r && r.alive === true ? true : null;
+      }).catch(function () { pingState[ip] = null; }).then(function () {
         render();
         return worker();
       });
@@ -306,16 +315,15 @@
     return Promise.all(workers);
   }
 
-  // Fetch the printer model. Only ask printers we know are alive (ping returned
-  // true). Skips dead boxes — they'd otherwise eat 5s each for PJL+SNMP+HTTP timeouts.
+  // Fetch missing models independently of ICMP. Retry empty results on refresh.
   function modelsAll() {
-    if (!data) return;
+    if (!data) return Promise.resolve();
     var ips = {};
     (data.printers || []).forEach(function (p) {
-      if (p.ip && pingState[p.ip] === true) ips[p.ip] = true;
+      if (p.ip && !modelState[p.ip]) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
-    if (!queue.length) { render(); return; }
+    if (!queue.length) return Promise.resolve();
     var i = 0;
     function worker() {
       if (i >= queue.length) return Promise.resolve();
@@ -329,6 +337,7 @@
     }
     var workers = [];
     for (var k = 0; k < Math.min(8, queue.length); k++) workers.push(worker());
+    return Promise.all(workers);
   }
 
   api('ping').then(function (r) {
@@ -338,47 +347,50 @@
       }).join(' · ');
     }
   });
-  // SNMP get hrPrinterStatus + hrPrinterDetectedErrorState for every alive printer.
-  function statusAll() {
-    if (!data) return;
+  // Query every IP: SNMP can respond even when ICMP/TCP probes fail.
+  function statusAll(force) {
+    if (!data) return Promise.resolve();
     var ips = {};
     (data.printers || []).forEach(function (p) {
-      if (p.ip && pingState[p.ip] === true) ips[p.ip] = true;
+      if (p.ip) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
-    if (!queue.length) return;
+    if (!queue.length) return Promise.resolve();
     var i = 0;
     function worker() {
       if (i >= queue.length) return Promise.resolve();
       var ip = queue[i++];
-      return api('getStatus', { ip: ip }).then(function (r) {
-        if (r) statusState[ip] = { state: r.state || '', errors: r.errors || [] };
-      }).catch(function () {}).then(function () {
+      return api('getStatus', { ip: ip, force: force ? '1' : '0' }).then(function (r) {
+        statusState[ip] = r && !r.error ? r : { available: false };
+        if (!Array.isArray(statusState[ip].errors)) statusState[ip].errors = [];
+      }).catch(function () { statusState[ip] = { available: false }; }).then(function () {
         render();
         return worker();
       });
     }
-    for (var k = 0; k < Math.min(8, queue.length); k++) worker();
+    var workers = [];
+    for (var k = 0; k < Math.min(8, queue.length); k++) workers.push(worker());
+    return Promise.all(workers);
   }
 
   // Get the authoritative job counts via WMI, one query per server.
   function countsAll() {
-    if (!data) return;
+    if (!data) return Promise.resolve();
     var hosts = {};
     (data.printers || []).forEach(function (p) { if (p.server) hosts[p.server] = true; });
-    Object.keys(hosts).forEach(function (host) {
-      api('jobCounts', { host: host }).then(function (r) {
+    return Promise.all(Object.keys(hosts).map(function (host) {
+      return api('jobCounts', { host: host }).then(function (r) {
         if (!r || !r.counts) return;
         Object.keys(r.counts).forEach(function (printerName) {
           jobCountState[host + '|' + printerName] = r.counts[printerName];
         });
         render();
-      });
-    });
+      }).catch(function () {});
+    }));
   }
 
   $('search').oninput = render;
-  $('refreshBtn').onclick = load;
+  $('refreshBtn').onclick = function () { load(true); };
   $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter.name, selectedPrinter.host); };
   $('jobsClose').onclick = function () { $('jobsPanel').style.display = 'none'; selectedPrinter = null; render(); };
   $('jobsPurge').onclick = function () {
@@ -413,7 +425,8 @@
       countsAll();
     });
   };
-  load();
+  load(true);
+  refreshTimer = setInterval(function () { load(false); }, 30000);
 </script>
 </body>
 </html>
