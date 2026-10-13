@@ -10,7 +10,7 @@
   [hidden] { display:none !important; }
   html,body { margin:0; min-height:100%; }
   body { padding:18px; color:var(--ink); background:#f4f7fb; font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-  .app { max-width:1800px; margin:auto; }
+  .app { overflow-anchor:none; max-width:1800px; margin:auto; }
   h1,h2,h3,p { margin:0; }
   h1 { font-size:21px; letter-spacing:-.6px; }
   h2 { font-size:14px; font-weight:650; }
@@ -32,6 +32,7 @@
   #cfgState { font-size:11px; color:var(--muted); }
   #cfgState.bad { color:#a72d3d; }
   .refresh-meta { text-align:right; }
+  #refreshBtn { min-width:125px; }
   #lastUpdated { display:block; color:var(--muted); font-size:11px; }
   .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:16px; }
   .stat { display:grid; grid-template-columns:1fr auto; text-align:left; gap:5px 12px; padding:13px 15px; border-radius:9px; background:white; min-width:0; }
@@ -108,7 +109,7 @@
   #purgeMessage { margin-bottom:10px; font-size:12px; overflow-wrap:anywhere; }
   #purgeMessage:empty { display:none; }
   #purgeMessage.error,.error-text { color:#a12b3b; }
-  #jobsLive { margin:0 15px 5px; color:var(--muted); font-size:11px; }
+  #jobsLive { min-height:16px; margin:0 15px 5px; color:var(--muted); font-size:11px; }
   @media(max-width:1100px) { .main-grid.with-selection { grid-template-columns:1fr; } #jobsPanel { position:static; } #jobsBody { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .job-card { margin:5px 0; } }
   @media(max-width:650px) { body { padding:10px; } .app-head { align-items:start; flex-direction:column; gap:12px; } .head-actions { width:100%; justify-content:space-between; } .refresh-meta { text-align:left; } .stats { grid-template-columns:1fr 1fr; gap:8px; } .stat { padding:11px; } .stat small { min-height:30px; } .inventory-head { align-items:start; } #serverFilter { max-width:100%; } .filters .field { flex:1 1 100%; } .inventory-foot { flex-direction:column; gap:3px; } #jobsBody { display:block; } .table-wrap { max-height:430px; } }
 </style>
@@ -129,7 +130,7 @@
     <section class="panel" aria-labelledby="inventoryTitle">
       <div class="inventory-head"><div><h2 id="inventoryTitle">Imprimantes</h2><p id="srvHost" class="help">Chargement des serveurs…</p></div><span id="resultCount" aria-live="polite"></span></div>
       <div class="filters"><label class="field search-field" for="search"><span>Rechercher</span><input id="search" type="search" placeholder="Nom, adresse IP, modèle ou emplacement…"></label><label class="field" for="serverFilter"><span>Serveur d’impression</span><select id="serverFilter"><option value="">Tous les serveurs</option></select></label><button id="resetFilters" hidden>Effacer les filtres</button></div>
-      <div class="table-wrap"><table id="printersTable"><thead><tr><th>Imprimante</th><th>Emplacement</th><th>Port / IP</th><th>Modèle</th><th>Statut</th><th>Travaux</th></tr></thead><tbody id="tbody"><tr><td colspan="6" class="empty-state">Chargement du parc…</td></tr></tbody></table></div>
+      <div id="tableScroll" class="table-wrap"><table id="printersTable"><thead><tr><th>Imprimante</th><th>Emplacement</th><th>Port / IP</th><th>Modèle</th><th>Statut</th><th>Travaux</th></tr></thead><tbody id="tbody"><tr><td colspan="6" class="empty-state">Chargement du parc…</td></tr></tbody></table></div>
       <footer class="inventory-foot"><span>Cliquez sur une imprimante pour ouvrir sa file d’attente.</span><span>Windows · état de la file &nbsp; / &nbsp; SNMP · état matériel</span></footer>
     </section>
     <aside id="jobsPanel" class="panel" aria-labelledby="jobsTitle" hidden>
@@ -155,6 +156,27 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
+  }
+
+  // Unchanged content keeps its DOM nodes, focus and scroll positions.
+  function setHtml(id, html) {
+    var element = $(id);
+    if (element._printctlHtml === html) return;
+    element.innerHTML = html;
+    element._printctlHtml = html;
+  }
+  function preserveView(update) {
+    var positions = ['tableScroll', 'jobsBody'].map(function (id) {
+      var element = $(id);
+      return { element: element, top: element.scrollTop, left: element.scrollLeft };
+    });
+    var x = window.scrollX, y = window.scrollY;
+    update();
+    positions.forEach(function (p) { p.element.scrollTop = p.top; p.element.scrollLeft = p.left; });
+    if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+  }
+  function liveSnapshot() {
+    return { data: data, pingState: pingState, modelState: modelState, statusState: statusState, jobCountState: jobCountState };
   }
 
   var data = null;
@@ -260,9 +282,9 @@
   function updateServers() {
     var selected = $('serverFilter').value;
     var hosts = Array.from(new Set((data.printers || []).map(function (p) { return p.server; }).filter(Boolean))).sort();
-    $('serverFilter').innerHTML = '<option value="">Tous les serveurs</option>' + hosts.map(function (host) {
+    setHtml('serverFilter', '<option value="">Tous les serveurs</option>' + hosts.map(function (host) {
       return '<option value="' + escapeHtml(host) + '">' + escapeHtml(host) + '</option>';
-    }).join('');
+    }).join(''));
     $('serverFilter').value = hosts.indexOf(selected) !== -1 ? selected : '';
   }
   function render() {
@@ -270,7 +292,7 @@
     renderCounters();
     var rows = visiblePrinters();
     $('resultCount').textContent = rows.length + ' / ' + serverPrinters().length + ' affichée' + (rows.length > 1 ? 's' : '');
-    $('tbody').innerHTML = rows.map(function (p) {
+    setHtml('tbody', rows.map(function (p) {
       var name = shortName(p);
       var selected = selectedMatches(name, p.server);
       var indicator = printerIndicator(p);
@@ -286,7 +308,7 @@
         + '<td>' + escapeHtml(p.location || '—') + '</td><td class="mono">' + escapeHtml(p.ip || p.portname || '—') + '</td>'
         + '<td class="model-cell">' + modelCell + '</td><td class="status-cell">' + statusHtml(p) + '</td>'
         + '<td><span class="badge ' + (count > 0 ? 'jobs' : 'idle') + '">' + (count > 0 ? count + (count > 1 ? ' travaux' : ' travail') : 'Vide') + '</span></td></tr>';
-    }).join('') || '<tr><td colspan="6" class="empty-state"><strong>' + (data.printers.length ? 'Aucune imprimante pour ces filtres.' : 'Aucune imprimante disponible.') + '</strong>' + (data.printers.length ? 'Modifiez la recherche ou effacez les filtres.' : 'Vérifiez la connexion au serveur d’impression.') + '</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="empty-state"><strong>' + (data.printers.length ? 'Aucune imprimante pour ces filtres.' : 'Aucune imprimante disponible.') + '</strong>' + (data.printers.length ? 'Modifiez la recherche ou effacez les filtres.' : 'Vérifiez la connexion au serveur d’impression.') + '</td></tr>');
     [].slice.call(document.querySelectorAll('tr.printer')).forEach(function (tr) {
       tr.onclick = function () { openJobs(tr.getAttribute('data-name'), tr.getAttribute('data-host')); };
     });
@@ -300,13 +322,13 @@
     $('jobsSubtitle').textContent = selectedPrinter.host;
     var p = selectedRecord();
     if (!p) {
-      $('printerDetails').innerHTML = '<p class="help">Cette imprimante n’est plus présente dans l’inventaire courant.</p>';
+      setHtml('printerDetails', '<p class="help">Cette imprimante n’est plus présente dans l’inventaire courant.</p>');
       return;
     }
     var fields = [['Emplacement',p.location],['Adresse',p.ip || p.portname],['Partage',p.sharename],['Modèle',modelState[p.ip] || p.drivername]];
-    $('printerDetails').innerHTML = statusHtml(p) + '<dl>' + fields.filter(function (f) { return f[1]; }).map(function (f) {
+    setHtml('printerDetails', statusHtml(p) + '<dl>' + fields.filter(function (f) { return f[1]; }).map(function (f) {
       return '<dt>' + f[0] + '</dt><dd>' + escapeHtml(f[1]) + '</dd>';
-    }).join('') + '</dl>';
+    }).join('') + '</dl>');
   }
   function jobStatusLabel(job) {
     var raw = job.status || job.jobstatus || '';
@@ -319,10 +341,11 @@
     $('jobsPurge').disabled = purgeBusy || jobsLoading || !!jobsError || !jobsLoaded || !jobsRows.length;
     $('jobsPurge').textContent = purgeBusy ? 'Suppression en cours…' : 'Vider la file';
     $('jobsCount').textContent = jobsLoaded ? jobsRows.length : '—';
-    $('jobsLive').textContent = jobsLoading ? 'Lecture des travaux…' : jobsError ? 'Lecture de la file impossible.' : jobsLoaded ? jobsRows.length + (jobsRows.length > 1 ? ' travaux' : ' travail') + ' dans la file.' : '';
-    if (jobsLoading) { $('jobsBody').innerHTML = '<div class="empty-state">Chargement des travaux…</div>'; return; }
-    if (jobsError) { $('jobsBody').innerHTML = '<div class="empty-state error-text"><strong>La file est indisponible.</strong>' + escapeHtml(jobsError) + '</div>'; return; }
-    $('jobsBody').innerHTML = jobsRows.map(function (j) {
+    $('jobsLive').textContent = jobsLoading ? 'Lecture des travaux…' : jobsError ? 'Lecture impossible : ' + jobsError + (jobsLoaded ? ' · Derniers travaux connus.' : '') : jobsLoaded ? jobsRows.length + (jobsRows.length > 1 ? ' travaux' : ' travail') + ' dans la file.' : '';
+    if (jobsLoaded && (jobsLoading || jobsError)) return;
+    if (jobsLoading) { setHtml('jobsBody', '<div class="empty-state">Chargement des travaux…</div>'); return; }
+    if (jobsError) { setHtml('jobsBody', '<div class="empty-state error-text"><strong>La file est indisponible.</strong>' + escapeHtml(jobsError) + '</div>'); return; }
+    setHtml('jobsBody', jobsRows.map(function (j) {
       var submitted = j.submitted || '';
       var match = submitted.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
       if (match) submitted = match[3] + '/' + match[2] + '/' + match[1] + ' à ' + match[4] + ':' + match[5];
@@ -332,10 +355,11 @@
         + '<div class="job-meta"><span class="chip na">' + escapeHtml(jobStatusLabel(j)) + '</span><span>' + escapeHtml(j.owner || 'Utilisateur inconnu') + '</span></div>'
         + '<div class="job-meta"><span>' + escapeHtml(pages) + '</span><span>' + escapeHtml(size) + '</span></div>'
         + (submitted ? '<div class="status-detail">Soumis le ' + escapeHtml(submitted) + ' · heure du serveur</div>' : '') + '</article>';
-    }).join('') || '<div class="empty-state"><strong>La file est vide.</strong>Aucun document en attente sur cette imprimante.</div>';
+    }).join('') || '<div class="empty-state"><strong>La file est vide.</strong>Aucun document en attente sur cette imprimante.</div>');
   }
   function openJobs(name, host) {
     if (purgeBusy) return Promise.resolve();
+    if (!selectedMatches(name, host)) { jobsLoaded = false; jobsRows = []; jobsError = ''; }
     selectedPrinter = { name: name, host: host || '' };
     $('purgeMessage').textContent = '';
     render();
@@ -347,20 +371,20 @@
     if (!selectedPrinter || purgeBusy) return Promise.resolve();
     var request = ++jobsRequest;
     var target = { name: selectedPrinter.name, host: selectedPrinter.host };
-    jobsLoading = true; jobsLoaded = false; jobsError = ''; jobsRows = [];
+    jobsLoading = true; jobsError = '';
     renderJobs();
     return api('jobs', { printer: target.name, host: target.host }).then(function (r) {
       if (request !== jobsRequest || !selectedMatches(target.name, target.host)) return;
       if (!r || r.error || !Array.isArray(r.jobs)) throw new Error(r && r.error || 'Réponse du serveur invalide');
       jobsRows = r.jobs; jobsLoaded = true;
       jobCountState[target.host + '|' + target.name] = r.jobs.length;
-      render();
+      preserveView(render);
     }).catch(function (e) {
       if (request === jobsRequest && selectedMatches(target.name, target.host)) jobsError = e.message;
     }).then(function () {
       if (request !== jobsRequest || !selectedMatches(target.name, target.host)) return;
       jobsLoading = false;
-      renderJobs();
+      preserveView(renderJobs);
     });
   }
   function closeJobs() {
@@ -403,18 +427,21 @@
     if (!data) $('tbody').innerHTML = '<tr><td colspan="6" class="empty-state">Chargement…</td></tr>';
     return api('list').then(function (r) {
       if (!r || r.error || !Array.isArray(r.printers)) throw new Error(r && r.error || 'Inventaire invalide');
-      data = r;
-      updateServers();
-      pingState = {};
-      statusState = {};
-      var errors = (r.errors || []).map(function (e) { return e.host + ' : ' + e.error; });
-      $('cfgState').textContent = errors.length ? 'Inventaire partiel : ' + errors.join(' · ') : 'Serveurs connectés';
-      $('cfgState').className = errors.length ? 'pill bad' : 'pill ok';
-      $('lastUpdated').textContent = 'Inventaire à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' · actualisation 30 s';
-      render();
-      // Do not gate SNMP or model detection on ICMP. All workers are bounded;
-      // wait for them before allowing the next refresh to overwrite their results.
-      return Promise.all([pingAll(), modelsAll(), statusAll(manual !== false), countsAll()]).then(function () {
+      // Collect a complete refresh away from the displayed state. Slow probes
+      // must not temporarily remove alerts, filtered rows or the open queue.
+      var next = { data: r, pingState: {}, statusState: {}, modelState: Object.assign({}, modelState), jobCountState: {} };
+      if (!data) { data = r; updateServers(); render(); }
+      return Promise.all([pingAll(next), modelsAll(next), statusAll(manual !== false, next), countsAll(next)]).then(function () {
+        preserveView(function () {
+          data = next.data; pingState = next.pingState; statusState = next.statusState;
+          modelState = next.modelState; jobCountState = next.jobCountState;
+          updateServers();
+          var errors = (r.errors || []).map(function (e) { return e.host + ' : ' + e.error; });
+          $('cfgState').textContent = errors.length ? 'Inventaire partiel : ' + errors.join(' · ') : 'Serveurs connectés';
+          $('cfgState').className = errors.length ? 'pill bad' : 'pill ok';
+          $('lastUpdated').textContent = 'Inventaire à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' · actualisation 30 s';
+          render();
+        });
         if (selectedPrinter && !purgeBusy) return refreshJobs();
       });
     }).catch(function (e) {
@@ -424,7 +451,7 @@
         // A stale Windows state is not evidence of current availability.
         data.printers.forEach(function (p) { p.queueStatus = { known: false }; });
         pingState = {}; statusState = {};
-        render();
+        preserveView(render);
       }
     }).then(function () {
       loadBusy = false;
@@ -433,13 +460,13 @@
     });
   }
 
-  // Probe each unique IPv4 port-name. Concurrency capped at 8
-  // and to keep the spinner moving evenly across the rows. Returns a promise that
-  // resolves once every queued IP has been probed.
-  function pingAll() {
-    if (!data) return Promise.resolve();
+  // Probe each unique IPv4 port-name with at most 8 concurrent requests.
+  // Resolve once the snapshot contains every result.
+  function pingAll(snapshot) {
+    var current = snapshot || liveSnapshot();
+    if (!current.data) return Promise.resolve();
     var ips = {};
-    (data.printers || []).forEach(function (p) {
+    (current.data.printers || []).forEach(function (p) {
       if (p.ip) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
@@ -449,9 +476,9 @@
       if (i >= queue.length) return Promise.resolve();
       var ip = queue[i++];
       return api('pingPrinter', { ip: ip }).then(function (r) {
-        pingState[ip] = r && r.alive === true ? true : null;
-      }).catch(function () { pingState[ip] = null; }).then(function () {
-        render();
+        current.pingState[ip] = r && r.alive === true ? true : null;
+      }).catch(function () { current.pingState[ip] = null; }).then(function () {
+        if (!snapshot) preserveView(render);
         return worker();
       });
     }
@@ -461,11 +488,12 @@
   }
 
   // Fetch missing models independently of ICMP. Retry empty results on refresh.
-  function modelsAll() {
-    if (!data) return Promise.resolve();
+  function modelsAll(snapshot) {
+    var current = snapshot || liveSnapshot();
+    if (!current.data) return Promise.resolve();
     var ips = {};
-    (data.printers || []).forEach(function (p) {
-      if (p.ip && !modelState[p.ip]) ips[p.ip] = true;
+    (current.data.printers || []).forEach(function (p) {
+      if (p.ip && !current.modelState[p.ip]) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
     if (!queue.length) return Promise.resolve();
@@ -474,9 +502,9 @@
       if (i >= queue.length) return Promise.resolve();
       var ip = queue[i++];
       return api('getModel', { ip: ip }).then(function (r) {
-        if (r && typeof r.model === 'string') modelState[ip] = r.model;
+        if (r && typeof r.model === 'string') current.modelState[ip] = r.model;
       }).catch(function () {}).then(function () {
-        render();
+        if (!snapshot) preserveView(render);
         return worker();
       });
     }
@@ -493,10 +521,11 @@
     }
   });
   // Query every IP: SNMP can respond even when ICMP/TCP probes fail.
-  function statusAll(force) {
-    if (!data) return Promise.resolve();
+  function statusAll(force, snapshot) {
+    var current = snapshot || liveSnapshot();
+    if (!current.data) return Promise.resolve();
     var ips = {};
-    (data.printers || []).forEach(function (p) {
+    (current.data.printers || []).forEach(function (p) {
       if (p.ip) ips[p.ip] = true;
     });
     var queue = Object.keys(ips);
@@ -506,10 +535,10 @@
       if (i >= queue.length) return Promise.resolve();
       var ip = queue[i++];
       return api('getStatus', { ip: ip, force: force ? '1' : '0' }).then(function (r) {
-        statusState[ip] = r && !r.error ? r : { available: false };
-        if (!Array.isArray(statusState[ip].errors)) statusState[ip].errors = [];
-      }).catch(function () { statusState[ip] = { available: false }; }).then(function () {
-        render();
+        current.statusState[ip] = r && !r.error ? r : { available: false };
+        if (!Array.isArray(current.statusState[ip].errors)) current.statusState[ip].errors = [];
+      }).catch(function () { current.statusState[ip] = { available: false }; }).then(function () {
+        if (!snapshot) preserveView(render);
         return worker();
       });
     }
@@ -519,17 +548,18 @@
   }
 
   // Get the authoritative job counts via WMI, one query per server.
-  function countsAll() {
-    if (!data) return Promise.resolve();
+  function countsAll(snapshot) {
+    var current = snapshot || liveSnapshot();
+    if (!current.data) return Promise.resolve();
     var hosts = {};
-    (data.printers || []).forEach(function (p) { if (p.server) hosts[p.server] = true; });
+    (current.data.printers || []).forEach(function (p) { if (p.server) hosts[p.server] = true; });
     return Promise.all(Object.keys(hosts).map(function (host) {
       return api('jobCounts', { host: host }).then(function (r) {
         if (!r || !r.counts) return;
         Object.keys(r.counts).forEach(function (printerName) {
-          jobCountState[host + '|' + printerName] = r.counts[printerName];
+          current.jobCountState[host + '|' + printerName] = r.counts[printerName];
         });
-        render();
+        if (!snapshot) preserveView(render);
       }).catch(function () {});
     }));
   }

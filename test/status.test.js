@@ -66,9 +66,15 @@ function frontend(responses = {}) {
     const calls = [];
     const sandbox = {
         document: {
-            getElementById: id => elements[id] || (elements[id] = { value: '', style: {}, innerHTML: '', focus() {}, scrollIntoView() {} }),
+            getElementById: id => elements[id] || (elements[id] = {
+                value: '', style: {}, html: '', writes: 0, scrollTop: 0, scrollLeft: 0,
+                get innerHTML() { return this.html; },
+                set innerHTML(value) { this.html = value; this.writes++; },
+                focus() {}, scrollIntoView() {}
+            }),
             querySelectorAll: () => []
         },
+        window: { scrollX: 0, scrollY: 0, scrollTo(x, y) { this.scrollX = x; this.scrollY = y; } },
         fetch: async url => {
             const query = new URL(url, 'http://test.invalid').searchParams;
             const action = query.get('action'); calls.push({ action, query });
@@ -385,4 +391,88 @@ test('a failed purge releases controls and re-reads the queue without claiming s
     assert.match(h.elements.jobsBody.innerHTML, /Still here/);
     assert.equal(h.elements.jobsPurge.disabled, false);
     assert.equal(h.elements.jobsClose.disabled, false);
+});
+
+test('a slow refresh keeps the displayed snapshot and does not rebuild unchanged content', async () => {
+    let pending = false, releaseStatus;
+    const printer = samplePrinter('IMP-A', 'PRINT-A');
+    const status = { available: true, stateCode: 3, state: 'prête', errorsKnown: true, errors: ['bourrage'] };
+    const h = frontend({
+        list: { printers: [printer] }, pingPrinter: { alive: true }, getModel: { model: 'Brother' },
+        getStatus: () => pending ? new Promise(resolve => { releaseStatus = resolve; }) : status,
+        jobCounts: { counts: { 'IMP-A': 1 } }, jobs: { jobs: [{ jobid: '1', document: 'Document A' }] }
+    });
+    await h.sandbox.load(true);
+    h.sandbox.activeFilter = 'attention'; h.sandbox.render();
+    await h.sandbox.openJobs('IMP-A', 'PRINT-A');
+    const writes = ['tbody', 'serverFilter', 'printerDetails', 'jobsBody'].map(id => h.elements[id].writes);
+    pending = true;
+    const refresh = h.sandbox.load(false);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(h.elements.tbody.innerHTML, /SNMP : bourrage/);
+    assert.equal(h.elements.countAttention.textContent, 1);
+    assert.deepEqual(['tbody', 'serverFilter', 'printerDetails', 'jobsBody'].map(id => h.elements[id].writes), writes);
+    releaseStatus(status); await refresh;
+    assert.deepEqual(['tbody', 'serverFilter', 'printerDetails', 'jobsBody'].map(id => h.elements[id].writes), writes);
+    assert.equal(h.elements.jobsPurge.disabled, false);
+});
+
+test('changed probe results become visible together, including errors and current filters', async () => {
+    let releaseStatus;
+    const printer = samplePrinter('IMP-A', 'PRINT-A');
+    const h = frontend({
+        list: { printers: [printer] }, pingPrinter: { alive: null }, getModel: { model: '' },
+        getStatus: () => new Promise(resolve => { releaseStatus = resolve; }), jobCounts: { counts: {} }
+    });
+    h.sandbox.data = { printers: [printer] };
+    h.sandbox.pingState[printer.ip] = true;
+    h.sandbox.statusState[printer.ip] = { available: true, errors: ['bourrage'] };
+    h.sandbox.render();
+    const refresh = h.sandbox.load(false);
+    await new Promise(resolve => setImmediate(resolve));
+    h.sandbox.activeFilter = 'attention'; h.sandbox.render();
+    assert.match(h.elements.tbody.innerHTML, /IMP-A/);
+    assert.equal(h.sandbox.pingState[printer.ip], true);
+    releaseStatus({ error: 'SNMP indisponible' }); await refresh;
+    assert.equal(h.sandbox.pingState[printer.ip], null);
+    assert.equal(h.sandbox.statusState[printer.ip].available, false);
+    assert.equal(h.elements.countAttention.textContent, 0);
+    assert.match(h.elements.tbody.innerHTML, /Aucune imprimante pour ces filtres/);
+});
+
+test('refreshing an open queue preserves cards until replacement data arrives', async () => {
+    let pending = false, releaseJobs;
+    const h = frontend({ jobs: () => pending ? new Promise(resolve => { releaseJobs = resolve; }) : { jobs: [{ jobid: '1', document: 'Document A' }] } });
+    h.sandbox.data = { printers: [samplePrinter('IMP-A', 'PRINT-A')] };
+    await h.sandbox.openJobs('IMP-A', 'PRINT-A');
+    const writes = h.elements.jobsBody.writes;
+    h.elements.jobsBody.scrollTop = 140;
+    pending = true;
+    const refresh = h.sandbox.refreshJobs();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(h.elements.jobsBody.innerHTML, /Document A/);
+    assert.equal(h.elements.jobsBody.writes, writes);
+    assert.equal(h.elements.jobsCount.textContent, 1);
+    assert.equal(h.elements.jobsPurge.disabled, true);
+    releaseJobs({ jobs: [{ jobid: '1', document: 'Document A', pagesprinted: 2 }] }); await refresh;
+    assert.match(h.elements.jobsBody.innerHTML, /2 \/ \? pages/);
+    assert.equal(h.elements.jobsBody.scrollTop, 140);
+    const failed = h.sandbox.refreshJobs();
+    await new Promise(resolve => setImmediate(resolve));
+    releaseJobs({ error: 'Serveur indisponible' }); await failed;
+    assert.match(h.elements.jobsBody.innerHTML, /Document A/);
+    assert.match(h.elements.jobsLive.textContent, /Serveur indisponible.*Derniers travaux connus/);
+    assert.equal(h.elements.jobsPurge.disabled, true);
+});
+
+test('view restoration uses the position at update time for page, table and jobs', () => {
+    const h = frontend();
+    const table = h.sandbox.$('tableScroll'), jobs = h.sandbox.$('jobsBody');
+    table.scrollTop = 390; table.scrollLeft = 120; jobs.scrollTop = 180; jobs.scrollLeft = 4;
+    h.sandbox.window.scrollX = 0; h.sandbox.window.scrollY = 620;
+    h.sandbox.preserveView(() => {
+        table.scrollTop = 0; table.scrollLeft = 0; jobs.scrollTop = 0; jobs.scrollLeft = 0;
+        h.sandbox.window.scrollY = 300;
+    });
+    assert.deepEqual([table.scrollTop, table.scrollLeft, jobs.scrollTop, jobs.scrollLeft, h.sandbox.window.scrollY], [390, 120, 180, 4, 620]);
 });

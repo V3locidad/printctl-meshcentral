@@ -1,5 +1,12 @@
 # Historique
 
+## 0.0.31
+
+- Corrige les sauts de l’interface pendant les actualisations automatiques et manuelles : les résultats réseau sont appliqués ensemble, sans reconstruire le tableau à chaque réponse.
+- Conserve les éléments inchangés et les positions de défilement de la page, du tableau et des travaux.
+- Garde la file ouverte visible pendant sa relecture. En cas d’erreur, les derniers travaux connus restent affichés avec un message explicite et la purge désactivée.
+- Stabilise la largeur du bouton Rafraîchir et ajoute 4 tests de non-régression (28 au total).
+
 ## 0.0.30
 
 - Refonte visuelle : tableau aéré, recherche, filtre par serveur et compteurs cliquables (toutes, prêtes, à surveiller, état inconnu).
