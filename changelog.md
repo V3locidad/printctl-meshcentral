@@ -1,5 +1,14 @@
 # Historique
 
+## 0.0.30
+
+- Refonte visuelle : tableau aéré, recherche, filtre par serveur et compteurs cliquables (toutes, prêtes, à surveiller, état inconnu).
+- Met en avant l’état Windows et conserve les indications réseau et SNMP avec leur source.
+- Ajoute un panneau de détail et de travaux pour l’imprimante sélectionnée, adapté aux petits écrans.
+- Distingue les files vides des erreurs de lecture et ignore les réponses tardives après un changement de sélection.
+- Conserve la confirmation avant purge, verrouille la cible pendant la suppression et relit la file après un succès partiel ou un échec.
+- Ajoute 7 tests ; 24 tests au total, sans accès au parc réel.
+
 ## 0.0.29
 
 - Affiche l’état des files Windows au lieu de déduire « hors ligne » d’un ping échoué.

@@ -66,7 +66,7 @@ function frontend(responses = {}) {
     const calls = [];
     const sandbox = {
         document: {
-            getElementById: id => elements[id] || (elements[id] = { value: '', style: {}, innerHTML: '' }),
+            getElementById: id => elements[id] || (elements[id] = { value: '', style: {}, innerHTML: '', focus() {}, scrollIntoView() {} }),
             querySelectorAll: () => []
         },
         fetch: async url => {
@@ -260,4 +260,129 @@ test('overlapping refreshes do not start competing status requests', async () =>
     release({ printers: [] });
     await first;
     assert.equal(h.elements.refreshBtn.disabled, false);
+});
+
+function samplePrinter(name, host, level = 'ok') {
+    return { printername: '\\\\' + host + '\\' + name, sharename: name, server: host, ip: '192.0.2.' + (host === 'PRINT-A' ? 1 : 2), location: 'Salle test', drivername: 'Brother', queueStatus: { known: true, states: [{ level, label: level === 'ok' ? 'Prête' : 'Suspendue' }] } };
+}
+
+test('filter counts reflect Windows and validated alerts, not failed network probes', () => {
+    const h = frontend();
+    const p1 = samplePrinter('READY', 'PRINT-A');
+    const p2 = { ...samplePrinter('PAUSED', 'PRINT-A', 'warn'), ip: '192.0.2.3' };
+    const p3 = samplePrinter('ALERT', 'PRINT-B');
+    const p4 = { ...samplePrinter('UNKNOWN', 'PRINT-B'), ip: '192.0.2.4', queueStatus: { known: false } };
+    h.sandbox.data = { printers: [p1, p2, p3, p4] };
+    h.sandbox.pingState[p1.ip] = null;
+    h.sandbox.statusState[p3.ip] = { available: true, errors: ['bourrage'] };
+    h.sandbox.render();
+    assert.equal(h.elements.countAll.textContent, 4);
+    assert.equal(h.elements.countReady.textContent, 1);
+    assert.equal(h.elements.countAttention.textContent, 2);
+    assert.equal(h.elements.countUnknown.textContent, 1);
+    h.elements.serverFilter.value = 'PRINT-A';
+    h.sandbox.activeFilter = 'ready'; h.sandbox.render();
+    assert.equal(h.elements.countAll.textContent, 2);
+    assert.equal(h.elements.countAttention.textContent, 1);
+    assert.match(h.elements.tbody.innerHTML, /READY/);
+    assert.doesNotMatch(h.elements.tbody.innerHTML, /PAUSED|ALERT/);
+});
+
+test('search combines with category and server filters without losing the selection', async () => {
+    const h = frontend({ jobs: { jobs: [] } });
+    h.sandbox.data = { printers: [samplePrinter('IMP-A', 'PRINT-A'), samplePrinter('IMP-B', 'PRINT-B')] };
+    await h.sandbox.openJobs('IMP-A', 'PRINT-A');
+    h.sandbox.modelState['192.0.2.2'] = 'LaserJet';
+    h.elements.serverFilter.value = 'PRINT-B'; h.elements.search.value = 'laserjet';
+    h.sandbox.render();
+    assert.match(h.elements.tbody.innerHTML, /IMP-B/);
+    assert.doesNotMatch(h.elements.tbody.innerHTML, /IMP-A/);
+    assert.equal(h.elements.jobsTitle.textContent, 'IMP-A');
+    assert.equal(h.elements.jobsPanel.hidden, false);
+    h.elements.search.value = 'no match'; h.sandbox.render();
+    assert.match(h.elements.tbody.innerHTML, /Aucune imprimante pour ces filtres/);
+    assert.equal(h.elements.countAll.textContent, 1);
+    h.elements.resetFilters.onclick();
+    assert.match(h.elements.tbody.innerHTML, /IMP-A/);
+    assert.match(h.elements.tbody.innerHTML, /IMP-B/);
+});
+
+test('changing printer ignores late jobs from the previously selected server', async () => {
+    let resolveA;
+    const h = frontend({ jobs: query => query.get('host') === 'PRINT-A' ? new Promise(resolve => { resolveA = resolve; }) : { jobs: [{ jobid: '2', document: '<img src=x>', owner: 'user&test', status: 'Printing' }] } });
+    h.sandbox.data = { printers: [samplePrinter('SAME', 'PRINT-A'), samplePrinter('SAME', 'PRINT-B')] };
+    const first = h.sandbox.openJobs('SAME', 'PRINT-A');
+    await new Promise(resolve => setImmediate(resolve));
+    await h.sandbox.openJobs('SAME', 'PRINT-B');
+    resolveA({ jobs: [{ jobid: '1', document: 'OLD SERVER' }] }); await first;
+    assert.equal(h.elements.jobsSubtitle.textContent, 'PRINT-B');
+    assert.match(h.elements.jobsBody.innerHTML, /&lt;img src=x&gt;/);
+    assert.match(h.elements.jobsBody.innerHTML, /user&amp;test/);
+    assert.doesNotMatch(h.elements.jobsBody.innerHTML, /OLD SERVER/);
+    assert.equal(h.elements.jobsPurge.disabled, false);
+});
+
+test('queue read errors are not displayed as empty and cannot enable purge', async () => {
+    const h = frontend({ jobs: new Error('Serveur indisponible') });
+    h.sandbox.data = { printers: [samplePrinter('IMP-A', 'PRINT-A')] };
+    await h.sandbox.openJobs('IMP-A', 'PRINT-A');
+    assert.match(h.elements.jobsBody.innerHTML, /Serveur indisponible/);
+    assert.doesNotMatch(h.elements.jobsBody.innerHTML, /La file est vide/);
+    assert.equal(h.elements.jobsPurge.disabled, true);
+    assert.equal(h.elements.jobsRefresh.disabled, false);
+    h.sandbox.closeJobs();
+    assert.equal(h.elements.jobsPanel.hidden, true);
+});
+
+test('partial purge preserves remaining jobs and is tied to the selected server', async () => {
+    let purged = false, releasePurge;
+    const rows = [{ jobid: '1', document: 'Document A' }, { jobid: '2', document: 'Document B' }];
+    const h = frontend({
+        jobs: () => ({ jobs: purged ? rows.slice(1) : rows }),
+        jobCounts: () => ({ counts: { 'IMP-A': purged ? 1 : 2 } }),
+        purge: () => new Promise(resolve => { releasePurge = () => { purged = true; resolve({ deleted: 1, failed: 1, errors: [{ error: 'Accès refusé' }] }); }; })
+    });
+    h.sandbox.data = { printers: [samplePrinter('IMP-A', 'PRINT-A'), samplePrinter('IMP-B', 'PRINT-B')] };
+    h.sandbox.confirm = () => true;
+    await h.sandbox.openJobs('IMP-A', 'PRINT-A');
+    const first = h.sandbox.purgeJobs();
+    await new Promise(resolve => setImmediate(resolve));
+    await h.sandbox.purgeJobs();
+    await h.sandbox.openJobs('IMP-B', 'PRINT-B');
+    assert.equal(h.calls.filter(c => c.action === 'purge').length, 1);
+    assert.equal(h.sandbox.selectedPrinter.name, 'IMP-A');
+    const sent = h.calls.find(c => c.action === 'purge').query;
+    assert.equal(sent.get('printer'), 'IMP-A'); assert.equal(sent.get('host'), 'PRINT-A');
+    releasePurge(); await first;
+    assert.equal(h.elements.jobsCount.textContent, 1);
+    assert.match(h.elements.jobsBody.innerHTML, /Document B/);
+    assert.match(h.elements.purgeMessage.textContent, /Accès refusé/);
+    assert.equal(h.sandbox.jobCountState['PRINT-A|IMP-A'], 1);
+    assert.equal(h.elements.jobsClose.disabled, false);
+});
+
+test('declining purge and empty queues never send a purge request', async () => {
+    let empty = false;
+    const h = frontend({ jobs: () => ({ jobs: empty ? [] : [{ jobid: '1' }] }) });
+    h.sandbox.data = { printers: [samplePrinter('IMP-A', 'PRINT-A')] };
+    await h.sandbox.openJobs('IMP-A', 'PRINT-A');
+    await h.sandbox.purgeJobs();
+    assert.equal(h.calls.some(c => c.action === 'purge'), false);
+    empty = true; await h.sandbox.refreshJobs();
+    h.sandbox.confirm = () => true;
+    await h.sandbox.purgeJobs();
+    assert.equal(h.elements.jobsPurge.disabled, true);
+    assert.equal(h.calls.some(c => c.action === 'purge'), false);
+});
+
+test('a failed purge releases controls and re-reads the queue without claiming success', async () => {
+    const h = frontend({ jobs: { jobs: [{ jobid: '1', document: 'Still here' }] }, purge: new Error('Connexion perdue'), jobCounts: { counts: { 'IMP-A': 1 } } });
+    h.sandbox.data = { printers: [samplePrinter('IMP-A', 'PRINT-A')] };
+    h.sandbox.confirm = () => true;
+    await h.sandbox.openJobs('IMP-A', 'PRINT-A');
+    await h.sandbox.purgeJobs();
+    assert.match(h.elements.purgeMessage.textContent, /Suppression impossible : Connexion perdue/);
+    assert.match(h.elements.jobsBody.innerHTML, /Still here/);
+    assert.equal(h.elements.jobsPurge.disabled, false);
+    assert.equal(h.elements.jobsClose.disabled, false);
 });

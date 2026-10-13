@@ -1,97 +1,145 @@
 <!doctype html>
-<html>
+<html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Print Control</title>
 <style>
-  html, body { height: 100%; margin: 0; }
-  body { font-family: Segoe UI, Arial, sans-serif; font-size: 13px; padding: 10px; color: #222; box-sizing: border-box; display: flex; flex-direction: column; }
-  h2 { margin: 0 0 10px 0; font-size: 16px; flex: 0 0 auto; }
-  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #f4f4f4; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; flex: 0 0 auto; }
-  .bar input[type=text] { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
-  button { padding: 5px 10px; border: 1px solid #888; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
-  button.primary { background: #2c7be5; color: white; border-color: #2c7be5; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #eee; font-size: 11px; margin-left: 6px; }
-  .pill.ok { background: #d4edda; color: #155724; }
-  .pill.bad { background: #f8d7da; color: #721c24; }
-  .content { flex: 1 1 auto; overflow: auto; border: 1px solid #ddd; border-radius: 4px; min-height: 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { padding: 6px 10px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
-  th { background: #fafafa; font-weight: 600; position: sticky; top: 0; z-index: 1; }
-  .badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; }
-  .badge.jobs { background: #fff3cd; color: #856404; }
-  .badge.idle { background: #e2e3e5; color: #383d41; }
-  .badge.status { background: #d1ecf1; color: #0c5460; }
-  .mono { font-family: Menlo, Consolas, monospace; font-size: 12px; color: #555; }
-  .empty { color: #aaa; font-style: italic; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; vertical-align: middle; margin-right: 6px; }
-  .dot.unknown { background: #ccc; }
-  .dot.alive { background: #2ecc71; }
-  .dot.dead { background: #e74c3c; }
-  .dot.warn { background: #d99c18; }
-  .status-detail { display:block; color:#777; font-size:11px; margin-top:3px; }
-  button.danger { background: #e74c3c; color: white; border-color: #c0392b; }
-  .chip { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin: 1px 2px 1px 0; white-space: nowrap; }
-  .chip.ok   { background: #d4edda; color: #155724; }
-  .chip.warn { background: #fff3cd; color: #856404; }
-  .chip.bad  { background: #f8d7da; color: #721c24; }
-  .chip.na   { background: #e2e3e5; color: #383d41; }
-  tr.printer { cursor: pointer; }
-  tr.printer:hover { background: #f8f8ff; }
-  tr.printer.selected { background: #eef6ff; }
-  #jobsPanel { margin-top: 10px; flex: 0 0 auto; border: 1px solid #ddd; border-radius: 4px; max-height: 320px; display: flex; flex-direction: column; }
-  #jobsPanel h3 { margin: 0; padding: 8px; background: #eee; font-size: 13px; display: flex; align-items: center; gap: 8px; }
-  #jobsWrap { flex: 1 1 auto; overflow: auto; }
-  #jobsTable { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #jobsTable th, #jobsTable td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; }
-  #jobsTable th { background: #fafafa; position: sticky; top: 0; }
+  :root { color-scheme:light; --ink:#1c2b40; --muted:#64748b; --line:#dfe6ee; --blue:#205dcc; --soft:#edf4ff; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  html,body { margin:0; min-height:100%; }
+  body { padding:18px; color:var(--ink); background:#f4f7fb; font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .app { max-width:1800px; margin:auto; }
+  h1,h2,h3,p { margin:0; }
+  h1 { font-size:21px; letter-spacing:-.6px; }
+  h2 { font-size:14px; font-weight:650; }
+  button,input,select { font:inherit; }
+  button { min-height:34px; border:1px solid var(--line); border-radius:6px; padding:6px 11px; color:var(--ink); background:white; cursor:pointer; font-weight:550; }
+  button:hover { background:#f3f7fc; border-color:#bdccdf; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.primary { background:var(--blue); border-color:var(--blue); color:white; }
+  button.primary:hover { background:#174cac; }
+  button.danger { color:#a72d3d; border-color:#e8c5cb; background:white; }
+  button.danger:hover { background:#fff2f3; }
+  :focus-visible { outline:3px solid #80abfa; outline-offset:2px; }
+  .app-head { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:17px; }
+  .brand { display:flex; gap:12px; align-items:center; }
+  .brand-mark { width:39px; height:39px; display:grid; place-items:center; border-radius:10px; background:var(--blue); color:white; flex-shrink:0; }
+  .brand-mark svg { width:23px; height:23px; }
+  .subtext,.help { color:var(--muted); font-size:12px; }
+  .head-actions { display:flex; align-items:center; gap:9px; }
+  #cfgState { font-size:11px; color:var(--muted); }
+  #cfgState.bad { color:#a72d3d; }
+  .refresh-meta { text-align:right; }
+  #lastUpdated { display:block; color:var(--muted); font-size:11px; }
+  .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:16px; }
+  .stat { display:grid; grid-template-columns:1fr auto; text-align:left; gap:5px 12px; padding:13px 15px; border-radius:9px; background:white; min-width:0; }
+  .stat[aria-pressed="true"] { background:var(--soft); border-color:#92b5f1; box-shadow:inset 0 0 0 1px #92b5f1; }
+  .stat-label { align-self:center; font-size:12px; font-weight:600; }
+  .stat-value { font-size:25px; line-height:1.2; font-weight:650; letter-spacing:-.8px; }
+  .stat small { grid-column:1/-1; color:var(--muted); font-size:11px; font-weight:400; }
+  .stat[data-filter="ready"] .stat-value { color:#21724f; }
+  .stat[data-filter="attention"] .stat-value { color:#9b6512; }
+  .stat[data-filter="unknown"] .stat-value { color:var(--muted); }
+  .main-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; align-items:start; }
+  .main-grid.with-selection { grid-template-columns:minmax(0,1fr) 380px; }
+  .panel { background:white; border:1px solid var(--line); border-radius:10px; overflow:hidden; min-width:0; }
+  .inventory-head { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:14px 16px 10px; }
+  .inventory-head .help { font-size:11px; margin-top:2px; }
+  .filters { display:flex; align-items:end; gap:10px; padding:0 16px 12px; flex-wrap:wrap; }
+  .field { display:block; min-width:0; }
+  .field span { display:block; font-size:11px; font-weight:550; margin-bottom:4px; color:var(--muted); }
+  .search-field { flex:1 1 250px; }
+  input[type=search],select { width:100%; min-height:35px; border:1px solid #cbd6e3; border-radius:6px; background:white; padding:6px 9px; color:var(--ink); }
+  #serverFilter { min-width:165px; max-width:270px; }
+  #resetFilters { color:var(--blue); border-color:transparent; font-size:12px; }
+  .table-wrap { overflow:auto; max-height:560px; }
+  #printersTable { width:100%; border-collapse:collapse; font-size:12px; min-width:850px; }
+  th,td { padding:12px 15px; text-align:left; vertical-align:top; border-bottom:1px solid #edf1f6; }
+  th { position:sticky; top:0; z-index:1; color:var(--muted); background:#f9fbfd; font-size:11px; font-weight:550; }
+  tr.printer { cursor:pointer; }
+  tr.printer:hover { background:#f7faff; }
+  tr.printer.selected { background:var(--soft); }
+  tr.printer.selected td:first-child { box-shadow:inset 3px 0 var(--blue); }
+  .printer-link { border:0; padding:0; min-height:20px; text-align:left; background:transparent; color:var(--ink); font-size:12px; font-weight:650; }
+  .printer-link:hover { background:transparent; color:var(--blue); }
+  .printer-name { display:flex; gap:7px; align-items:center; }
+  .printer-path { display:block; color:var(--muted); font-size:10px; margin-top:4px; max-width:235px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .model-cell { max-width:215px; }
+  .model-name { overflow-wrap:anywhere; }
+  .status-cell { min-width:225px; }
+  .mono { font:11px/1.5 Menlo,Consolas,monospace; color:#5e6c80; }
+  .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; display:inline-block; }
+  .dot.alive { background:#26835b; } .dot.dead { background:#ca5363; } .dot.warn { background:#d09a36; } .dot.unknown { background:#a4afbd; }
+  .chip,.badge { display:inline-block; border-radius:5px; padding:2px 6px; font-size:10px; margin:0 3px 2px 0; line-height:1.5; }
+  .chip.ok { color:#1c6546; background:#e7f5ed; }
+  .chip.warn,.badge.jobs { color:#805b16; background:#fff3da; }
+  .chip.bad { color:#a12b3b; background:#fcecef; }
+  .chip.na,.badge.idle { color:#64748b; background:#eef2f6; }
+  .primary-status .chip { font-size:11px; font-weight:550; }
+  .status-detail { display:block; color:var(--muted); font-size:10px; margin-top:3px; line-height:1.5; }
+  .empty { color:var(--muted); }
+  .empty-state { text-align:center; padding:30px 18px; color:var(--muted); }
+  .empty-state strong { display:block; color:#455771; font-size:13px; font-weight:550; margin-bottom:5px; }
+  .inventory-foot { border-top:1px solid var(--line); padding:9px 15px; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:11px; }
+  #resultCount { font-weight:550; color:#4e627c; }
+  #jobsPanel { position:sticky; top:16px; }
+  .detail-head { padding:15px; border-bottom:1px solid var(--line); }
+  .detail-title-line { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .eyebrow { color:var(--muted); font-size:10px; letter-spacing:.8px; text-transform:uppercase; }
+  #jobsTitle { font-size:17px; font-weight:650; overflow-wrap:anywhere; }
+  #jobsSubtitle { font-size:11px; color:var(--muted); margin-top:3px; overflow-wrap:anywhere; }
+  #jobsClose { min-height:26px; padding:2px 7px; font-size:11px; }
+  #printerDetails { padding:12px 15px; border-bottom:1px solid var(--line); }
+  #printerDetails dl { display:grid; grid-template-columns:80px minmax(0,1fr); gap:5px 8px; margin:10px 0 0; font-size:11px; }
+  #printerDetails dt { color:var(--muted); } #printerDetails dd { margin:0; overflow-wrap:anywhere; }
+  .jobs-toolbar { display:flex; align-items:center; gap:8px; padding:12px 15px 8px; }
+  .jobs-toolbar h3 { font-size:12px; margin-right:auto; }
+  #jobsRefresh { font-size:11px; min-height:28px; padding:4px 8px; }
+  #jobsBody { max-height:380px; overflow:auto; padding:0 15px 5px; }
+  .job-card { border:1px solid var(--line); border-radius:7px; padding:11px; margin:7px 0; }
+  .job-head { display:flex; align-items:start; justify-content:space-between; gap:8px; }
+  .job-document { font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+  .job-meta { font-size:11px; color:var(--muted); display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:7px; overflow-wrap:anywhere; }
+  .job-id { font-size:10px; color:var(--muted); white-space:nowrap; }
+  .detail-foot { padding:12px 15px; background:#fafbfd; border-top:1px solid var(--line); }
+  #jobsPurge { width:100%; font-size:12px; }
+  #purgeMessage { margin-bottom:10px; font-size:12px; overflow-wrap:anywhere; }
+  #purgeMessage:empty { display:none; }
+  #purgeMessage.error,.error-text { color:#a12b3b; }
+  #jobsLive { margin:0 15px 5px; color:var(--muted); font-size:11px; }
+  @media(max-width:1100px) { .main-grid.with-selection { grid-template-columns:1fr; } #jobsPanel { position:static; } #jobsBody { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .job-card { margin:5px 0; } }
+  @media(max-width:650px) { body { padding:10px; } .app-head { align-items:start; flex-direction:column; gap:12px; } .head-actions { width:100%; justify-content:space-between; } .refresh-meta { text-align:left; } .stats { grid-template-columns:1fr 1fr; gap:8px; } .stat { padding:11px; } .stat small { min-height:30px; } .inventory-head { align-items:start; } #serverFilter { max-width:100%; } .filters .field { flex:1 1 100%; } .inventory-foot { flex-direction:column; gap:3px; } #jobsBody { display:block; } .table-wrap { max-height:430px; } }
 </style>
 </head>
 <body>
-
-<h2>Print Control <span id="cfgState" class="pill">checking…</span></h2>
-
-<div class="bar">
-  <strong>Serveur(s) :</strong> <span id="srvHost" class="mono">—</span>
-  <span style="flex:1"></span>
-  <input type="text" id="search" placeholder="Filtrer (nom, partage, IP, driver…)" style="width:280px">
-  <button id="refreshBtn" class="primary">Rafraîchir</button>
-</div>
-
-<div class="content">
-  <table>
-    <thead>
-      <tr>
-        <th>Nom</th>
-        <th>Partage</th>
-        <th>Port / IP</th>
-        <th>Modèle</th>
-        <th>Statut</th>
-        <th>Localisation</th>
-        <th>Jobs</th>
-      </tr>
-    </thead>
-    <tbody id="tbody">
-      <tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<div id="jobsPanel" style="display:none">
-  <h3>
-    File d'attente — <span id="jobsTitle"></span>
-    <span style="flex:1"></span>
-    <button id="jobsPurge" class="danger">Vider la file</button>
-    <button id="jobsRefresh">Rafraîchir</button>
-    <button id="jobsClose">Fermer</button>
-  </h3>
-  <div id="jobsWrap">
-    <table id="jobsTable">
-      <thead><tr><th>ID</th><th>Utilisateur</th><th>Document</th><th>État</th><th>Pages</th><th>Taille</th><th>Soumis</th></tr></thead>
-      <tbody id="jobsBody"></tbody>
-    </table>
-  </div>
+<div class="app">
+  <header class="app-head">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 8V3h12v5M6 17H3V8h18v9h-3M6 14h12v7H6z"/><path d="M17 11h1"/></svg></span><div><h1>Print Control</h1><p class="subtext">Votre parc d’imprimantes, ses états et ses travaux.</p></div></div>
+    <div class="head-actions"><div class="refresh-meta"><span id="cfgState" role="status">Connexion aux serveurs…</span><span id="lastUpdated">Actualisation automatique · 30 s</span></div><button id="refreshBtn" class="primary">Rafraîchir</button></div>
+  </header>
+  <nav class="stats" aria-label="Filtrer les imprimantes par état">
+    <button class="stat" data-filter="all" aria-pressed="true"><span class="stat-label">Toutes les imprimantes</span><span id="countAll" class="stat-value">—</span><small>Parc du serveur sélectionné</small></button>
+    <button class="stat" data-filter="ready" aria-pressed="false"><span class="stat-label">Prêtes</span><span id="countReady" class="stat-value">—</span><small>Files Windows sans alerte</small></button>
+    <button class="stat" data-filter="attention" aria-pressed="false"><span class="stat-label">À surveiller</span><span id="countAttention" class="stat-value">—</span><small>Alertes, pauses ou activité</small></button>
+    <button class="stat" data-filter="unknown" aria-pressed="false"><span class="stat-label">État inconnu</span><span id="countUnknown" class="stat-value">—</span><small>État de la file non confirmé</small></button>
+  </nav>
+  <main id="mainGrid" class="main-grid">
+    <section class="panel" aria-labelledby="inventoryTitle">
+      <div class="inventory-head"><div><h2 id="inventoryTitle">Imprimantes</h2><p id="srvHost" class="help">Chargement des serveurs…</p></div><span id="resultCount" aria-live="polite"></span></div>
+      <div class="filters"><label class="field search-field" for="search"><span>Rechercher</span><input id="search" type="search" placeholder="Nom, adresse IP, modèle ou emplacement…"></label><label class="field" for="serverFilter"><span>Serveur d’impression</span><select id="serverFilter"><option value="">Tous les serveurs</option></select></label><button id="resetFilters" hidden>Effacer les filtres</button></div>
+      <div class="table-wrap"><table id="printersTable"><thead><tr><th>Imprimante</th><th>Emplacement</th><th>Port / IP</th><th>Modèle</th><th>Statut</th><th>Travaux</th></tr></thead><tbody id="tbody"><tr><td colspan="6" class="empty-state">Chargement du parc…</td></tr></tbody></table></div>
+      <footer class="inventory-foot"><span>Cliquez sur une imprimante pour ouvrir sa file d’attente.</span><span>Windows · état de la file &nbsp; / &nbsp; SNMP · état matériel</span></footer>
+    </section>
+    <aside id="jobsPanel" class="panel" aria-labelledby="jobsTitle" hidden>
+      <div class="detail-head"><div class="detail-title-line"><span class="eyebrow">File d’attente</span><button id="jobsClose">Fermer</button></div><h2 id="jobsTitle" tabindex="-1"></h2><p id="jobsSubtitle"></p></div>
+      <div id="printerDetails"></div>
+      <div class="jobs-toolbar"><h3>Travaux <span id="jobsCount" class="badge idle">—</span></h3><button id="jobsRefresh">Actualiser la file</button></div>
+      <p id="jobsLive" role="status" aria-live="polite"></p><div id="jobsBody"></div>
+      <div class="detail-foot"><p id="purgeMessage" role="status" aria-live="polite"></p><button id="jobsPurge" class="danger" disabled>Vider la file</button></div>
+    </aside>
+  </main>
 </div>
 
 <script>
@@ -122,6 +170,9 @@
   // Periodic background refresh for the job-count column.
   var refreshTimer = null;
   var loadBusy = false;
+  var activeFilter = 'all';
+  var jobsRows = [], jobsLoading = false, jobsLoaded = false, jobsError = '';
+  var jobsRequest = 0, purgeBusy = false;
 
   function printerIndicator(p) {
     var queue = p.queueStatus;
@@ -148,6 +199,7 @@
         return '<span class="chip ' + level + '">Windows : ' + escapeHtml(s.label) + '</span>';
       }).join('');
     } else html = '<span class="chip na">État Windows inconnu</span>';
+    html = '<div class="primary-status">' + html + '</div>';
     var ip = p.ip;
     if (!ip) return html + '<span class="status-detail">Adresse IP non identifiée</span>';
     var s = statusState[ip];
@@ -166,93 +218,180 @@
     return html;
   }
 
+  function shortName(p) { return (p.printername || '').split('\\').pop(); }
+  function printerKey(p) { return (p.server || '') + '|' + shortName(p); }
+  function selectedMatches(name, host) { return selectedPrinter && selectedPrinter.name === name && selectedPrinter.host === (host || ''); }
+  function selectedRecord() {
+    return data && selectedPrinter && data.printers.find(function (p) { return selectedMatches(shortName(p), p.server); });
+  }
+  function printerCategory(p) {
+    var queue = p.queueStatus;
+    var snmp = statusState[p.ip];
+    if (snmp && snmp.available && snmp.errors && snmp.errors.length) return 'attention';
+    if (!queue || !queue.known || !Array.isArray(queue.states) || !queue.states.length) return 'unknown';
+    if (queue.states.some(function (s) { return s.level === 'bad' || s.level === 'warn'; })) return 'attention';
+    return queue.states.every(function (s) { return s.level === 'ok'; }) ? 'ready' : 'unknown';
+  }
+  function jobCount(p) {
+    var key = printerKey(p);
+    return Object.prototype.hasOwnProperty.call(jobCountState, key) ? jobCountState[key] : (p.cjobs || 0);
+  }
+  function serverPrinters() {
+    var server = $('serverFilter').value;
+    return (data && data.printers || []).filter(function (p) { return !server || p.server === server; });
+  }
+  function visiblePrinters() {
+    var query = ($('search').value || '').toLowerCase().trim();
+    return serverPrinters().filter(function (p) {
+      if (activeFilter !== 'all' && printerCategory(p) !== activeFilter) return false;
+      return !query || [p.printername, p.sharename, p.portname, p.ip, p.drivername, modelState[p.ip], p.comment, p.location, p.server]
+        .some(function (v) { return String(v || '').toLowerCase().indexOf(query) !== -1; });
+    });
+  }
+  function renderCounters() {
+    var counts = { all: 0, ready: 0, attention: 0, unknown: 0 };
+    serverPrinters().forEach(function (p) { counts.all++; counts[printerCategory(p)]++; });
+    [['all','countAll'],['ready','countReady'],['attention','countAttention'],['unknown','countUnknown']].forEach(function (item) { $(item[1]).textContent = counts[item[0]]; });
+    [].slice.call(document.querySelectorAll('.stat[data-filter]')).forEach(function (button) {
+      button.setAttribute('aria-pressed', String(button.getAttribute('data-filter') === activeFilter));
+    });
+    $('resetFilters').hidden = !($('search').value || $('serverFilter').value || activeFilter !== 'all');
+  }
+  function updateServers() {
+    var selected = $('serverFilter').value;
+    var hosts = Array.from(new Set((data.printers || []).map(function (p) { return p.server; }).filter(Boolean))).sort();
+    $('serverFilter').innerHTML = '<option value="">Tous les serveurs</option>' + hosts.map(function (host) {
+      return '<option value="' + escapeHtml(host) + '">' + escapeHtml(host) + '</option>';
+    }).join('');
+    $('serverFilter').value = hosts.indexOf(selected) !== -1 ? selected : '';
+  }
   function render() {
     if (!data) return;
-    var q = ($('search').value || '').toLowerCase().trim();
-    var rows = (data.printers || []).filter(function (p) {
-      if (!q) return true;
-      return [p.printername, p.sharename, p.portname, p.drivername, p.comment, p.location]
-        .some(function (v) { return (v || '').toLowerCase().indexOf(q) !== -1; });
-    });
-    if (!rows.length) {
-      $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Aucun résultat.</td></tr>';
-      return;
-    }
-    // The short name (last UNC segment) is what users actually recognise; the full
-    // \\host\name path is shown as subtitle in case someone needs to copy-paste it.
+    renderCounters();
+    var rows = visiblePrinters();
+    $('resultCount').textContent = rows.length + ' / ' + serverPrinters().length + ' affichée' + (rows.length > 1 ? 's' : '');
     $('tbody').innerHTML = rows.map(function (p) {
-      var shortName = (p.printername || '').split('\\').pop();
-      var sel = (selectedPrinter && selectedPrinter.name === shortName && selectedPrinter.host === p.server) ? ' selected' : '';
-      var ip = p.ip || '';
+      var name = shortName(p);
+      var selected = selectedMatches(name, p.server);
       var indicator = printerIndicator(p);
-      var model = modelState[ip];
-      var modelCell = model ? escapeHtml(model)
-        : p.drivername ? escapeHtml(p.drivername) + '<span class="status-detail">Pilote Windows</span>'
-        : '<span class="empty">Modèle inconnu</span>';
-      return '<tr class="printer' + sel + '" data-name="' + escapeHtml(shortName) + '" data-host="' + escapeHtml(p.server || '') + '">'
-           +   '<td><span class="dot ' + indicator.css + '" title="' + escapeHtml(indicator.title) + '"></span><b>' + escapeHtml(shortName) + '</b>'
-           +     '<div class="mono">' + escapeHtml(p.printername) + '</div>'
-           +   '</td>'
-           +   '<td>' + escapeHtml(p.sharename || '') + '</td>'
-           +   '<td class="mono">' + escapeHtml(p.portname || '') + '</td>'
-           +   '<td>' + modelCell + '</td>'
-           +   '<td>' + statusHtml(p) + '</td>'
-           +   '<td>' + escapeHtml(p.location || '') + '</td>'
-           +   '<td>' + (function () {
-                 // Prefer the live WMI count; fall back to the (often-wrong) cjobs
-                 // from rpcclient if we haven't fetched counts yet for this server.
-                 var key = (p.server || '') + '|' + shortName;
-                 var n = jobCountState.hasOwnProperty(key) ? jobCountState[key] : (p.cjobs || 0);
-                 return n > 0
-                   ? '<span class="badge jobs">' + n + ' job' + (n > 1 ? 's' : '') + '</span>'
-                   : '<span class="badge idle">vide</span>';
-               })() + '</td>'
-           + '</tr>';
-    }).join('');
+      var model = modelState[p.ip];
+      var modelCell = '<span class="model-name">' + escapeHtml(model || p.drivername || 'Modèle inconnu') + '</span>'
+        + (!model && p.drivername ? '<span class="status-detail">Pilote Windows</span>' : '');
+      var count = jobCount(p);
+      var share = p.sharename ? '\\\\' + (p.server || '') + '\\' + p.sharename : p.printername;
+      return '<tr class="printer' + (selected ? ' selected' : '') + '" data-name="' + escapeHtml(name) + '" data-host="' + escapeHtml(p.server || '') + '">'
+        + '<td><div class="printer-name"><span class="dot ' + indicator.css + '" title="' + escapeHtml(indicator.title) + '"></span>'
+        + '<button class="printer-link" aria-controls="jobsPanel" aria-expanded="' + !!selected + '" aria-label="Voir la file de ' + escapeHtml(name) + ' sur ' + escapeHtml(p.server || '') + '"' + (purgeBusy ? ' disabled' : '') + '>' + escapeHtml(name) + '</button></div>'
+        + '<span class="printer-path" title="' + escapeHtml(share) + '">' + escapeHtml(share) + '</span></td>'
+        + '<td>' + escapeHtml(p.location || '—') + '</td><td class="mono">' + escapeHtml(p.ip || p.portname || '—') + '</td>'
+        + '<td class="model-cell">' + modelCell + '</td><td class="status-cell">' + statusHtml(p) + '</td>'
+        + '<td><span class="badge ' + (count > 0 ? 'jobs' : 'idle') + '">' + (count > 0 ? count + (count > 1 ? ' travaux' : ' travail') : 'Vide') + '</span></td></tr>';
+    }).join('') || '<tr><td colspan="6" class="empty-state"><strong>' + (data.printers.length ? 'Aucune imprimante pour ces filtres.' : 'Aucune imprimante disponible.') + '</strong>' + (data.printers.length ? 'Modifiez la recherche ou effacez les filtres.' : 'Vérifiez la connexion au serveur d’impression.') + '</td></tr>';
     [].slice.call(document.querySelectorAll('tr.printer')).forEach(function (tr) {
       tr.onclick = function () { openJobs(tr.getAttribute('data-name'), tr.getAttribute('data-host')); };
     });
+    renderPrinterDetails();
   }
-
-  // Win32_PrintJob.JobStatus is a bitmask; the human-friendly Status string is more
-  // useful. We fall back to the bitmask if Status is empty.
+  function renderPrinterDetails() {
+    $('jobsPanel').hidden = !selectedPrinter;
+    $('mainGrid').className = 'main-grid' + (selectedPrinter ? ' with-selection' : '');
+    if (!selectedPrinter) return;
+    $('jobsTitle').textContent = selectedPrinter.name;
+    $('jobsSubtitle').textContent = selectedPrinter.host;
+    var p = selectedRecord();
+    if (!p) {
+      $('printerDetails').innerHTML = '<p class="help">Cette imprimante n’est plus présente dans l’inventaire courant.</p>';
+      return;
+    }
+    var fields = [['Emplacement',p.location],['Adresse',p.ip || p.portname],['Partage',p.sharename],['Modèle',modelState[p.ip] || p.drivername]];
+    $('printerDetails').innerHTML = statusHtml(p) + '<dl>' + fields.filter(function (f) { return f[1]; }).map(function (f) {
+      return '<dt>' + f[0] + '</dt><dd>' + escapeHtml(f[1]) + '</dd>';
+    }).join('') + '</dl>';
+  }
+  function jobStatusLabel(job) {
+    var raw = job.status || job.jobstatus || '';
+    return { Printing: 'Impression', Spooling: 'Préparation', Paused: 'Suspendu', Error: 'Erreur', Offline: 'Hors connexion',
+      Deleting: 'Suppression', Deleted: 'Supprimé', Printed: 'Imprimé', Complete: 'Terminé', 'OK': 'Prêt' }[raw] || raw || 'État non renseigné';
+  }
+  function renderJobs() {
+    $('jobsRefresh').disabled = jobsLoading || purgeBusy;
+    $('jobsClose').disabled = purgeBusy;
+    $('jobsPurge').disabled = purgeBusy || jobsLoading || !!jobsError || !jobsLoaded || !jobsRows.length;
+    $('jobsPurge').textContent = purgeBusy ? 'Suppression en cours…' : 'Vider la file';
+    $('jobsCount').textContent = jobsLoaded ? jobsRows.length : '—';
+    $('jobsLive').textContent = jobsLoading ? 'Lecture des travaux…' : jobsError ? 'Lecture de la file impossible.' : jobsLoaded ? jobsRows.length + (jobsRows.length > 1 ? ' travaux' : ' travail') + ' dans la file.' : '';
+    if (jobsLoading) { $('jobsBody').innerHTML = '<div class="empty-state">Chargement des travaux…</div>'; return; }
+    if (jobsError) { $('jobsBody').innerHTML = '<div class="empty-state error-text"><strong>La file est indisponible.</strong>' + escapeHtml(jobsError) + '</div>'; return; }
+    $('jobsBody').innerHTML = jobsRows.map(function (j) {
+      var submitted = j.submitted || '';
+      var match = submitted.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+      if (match) submitted = match[3] + '/' + match[2] + '/' + match[1] + ' à ' + match[4] + ':' + match[5];
+      var pages = (j.pagesprinted || '0') + ' / ' + (j.totalpages || '?') + ' pages';
+      var size = Number(j.size) > 0 ? Math.round(Number(j.size) / 1024) + ' Ko' : '';
+      return '<article class="job-card"><div class="job-head"><span class="job-document">' + escapeHtml(j.document || 'Document sans nom') + '</span><span class="job-id">#' + escapeHtml(j.jobid) + '</span></div>'
+        + '<div class="job-meta"><span class="chip na">' + escapeHtml(jobStatusLabel(j)) + '</span><span>' + escapeHtml(j.owner || 'Utilisateur inconnu') + '</span></div>'
+        + '<div class="job-meta"><span>' + escapeHtml(pages) + '</span><span>' + escapeHtml(size) + '</span></div>'
+        + (submitted ? '<div class="status-detail">Soumis le ' + escapeHtml(submitted) + ' · heure du serveur</div>' : '') + '</article>';
+    }).join('') || '<div class="empty-state"><strong>La file est vide.</strong>Aucun document en attente sur cette imprimante.</div>';
+  }
   function openJobs(name, host) {
+    if (purgeBusy) return Promise.resolve();
     selectedPrinter = { name: name, host: host || '' };
+    $('purgeMessage').textContent = '';
     render();
-    $('jobsPanel').style.display = '';
-    $('jobsTitle').textContent = name + (host ? '  (' + host + ')' : '');
-    $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
-    api('jobs', { printer: name, host: host || '' }).then(function (r) {
-      if (r.error) {
-        $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px;color:#721c24">' + escapeHtml(r.error) + '</td></tr>';
-        return;
-      }
-      // The live result is the most accurate count we'll ever have for this
-      // printer — update the badge from it (snapshots from countsAll can be
-      // minutes stale).
-      jobCountState[(host || '') + '|' + name] = (r.jobs || []).length;
+    $('jobsTitle').focus({ preventScroll: true });
+    $('jobsPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return refreshJobs();
+  }
+  function refreshJobs() {
+    if (!selectedPrinter || purgeBusy) return Promise.resolve();
+    var request = ++jobsRequest;
+    var target = { name: selectedPrinter.name, host: selectedPrinter.host };
+    jobsLoading = true; jobsLoaded = false; jobsError = ''; jobsRows = [];
+    renderJobs();
+    return api('jobs', { printer: target.name, host: target.host }).then(function (r) {
+      if (request !== jobsRequest || !selectedMatches(target.name, target.host)) return;
+      if (!r || r.error || !Array.isArray(r.jobs)) throw new Error(r && r.error || 'Réponse du serveur invalide');
+      jobsRows = r.jobs; jobsLoaded = true;
+      jobCountState[target.host + '|' + target.name] = r.jobs.length;
       render();
-      if (!r.jobs || !r.jobs.length) {
-        $('jobsBody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">File vide.</td></tr>';
-        return;
-      }
-      $('jobsBody').innerHTML = r.jobs.map(function (j) {
-        var pages = (j.pagesprinted || '0') + ' / ' + (j.totalpages || '?');
-        var size = j.size ? (Math.round(parseInt(j.size, 10) / 1024) + ' Ko') : '';
-        // TimeSubmitted is WMI's CIM_DATETIME: yyyymmddHHMMSS.mmmmmm±zzz
-        var submitted = j.submitted || '';
-        var m = submitted.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
-        if (m) submitted = m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6];
-        return '<tr>'
-             +   '<td class="mono">' + escapeHtml(j.jobid) + '</td>'
-             +   '<td>' + escapeHtml(j.owner || '') + '</td>'
-             +   '<td>' + escapeHtml(j.document || '') + '</td>'
-             +   '<td>' + escapeHtml(j.status || j.jobstatus || '') + '</td>'
-             +   '<td>' + escapeHtml(pages) + '</td>'
-             +   '<td>' + escapeHtml(size) + '</td>'
-             +   '<td class="mono">' + escapeHtml(submitted) + '</td>'
-             + '</tr>';
-      }).join('');
+    }).catch(function (e) {
+      if (request === jobsRequest && selectedMatches(target.name, target.host)) jobsError = e.message;
+    }).then(function () {
+      if (request !== jobsRequest || !selectedMatches(target.name, target.host)) return;
+      jobsLoading = false;
+      renderJobs();
+    });
+  }
+  function closeJobs() {
+    if (purgeBusy) return;
+    jobsRequest++;
+    selectedPrinter = null; jobsLoaded = false; jobsRows = []; jobsLoading = false;
+    render();
+  }
+  function purgeJobs() {
+    if (!selectedPrinter || purgeBusy || jobsLoading || !jobsLoaded || !jobsRows.length || jobsError) return Promise.resolve();
+    var target = { name: selectedPrinter.name, host: selectedPrinter.host };
+    if (!confirm('Vider toute la file de ' + target.name + ' sur ' + target.host + ' ?\n\nLes travaux seront supprimés sur le serveur d’impression.')) return Promise.resolve();
+    purgeBusy = true;
+    $('purgeMessage').textContent = '';
+    $('purgeMessage').className = '';
+    render(); renderJobs();
+    return api('purge', { printer: target.name, host: target.host }).then(function (r) {
+      if (!r || r.error || typeof r.deleted !== 'number') throw new Error(r && r.error || 'Résultat de suppression non confirmé');
+      var message = r.deleted + (r.deleted > 1 ? ' travaux supprimés' : ' travail supprimé') + '.';
+      if (r.failed) message += ' ' + r.failed + ' échec(s).' + (r.errors && r.errors[0] ? ' ' + (r.errors[0].error || '') : '');
+      else if (!r.deleted) message += ' Aucun travail supprimé ; vérification de la file…';
+      $('purgeMessage').textContent = message;
+      $('purgeMessage').className = r.failed ? 'error' : '';
+    }).catch(function (e) {
+      $('purgeMessage').textContent = 'Suppression impossible : ' + e.message;
+      $('purgeMessage').className = 'error';
+    }).then(function () {
+      purgeBusy = false;
+      render(); renderJobs();
+      // Re-read the queue. A partial purge must never optimistically show it empty.
+      return countsAll().then(refreshJobs);
     });
   }
 
@@ -260,19 +399,24 @@
     if (loadBusy) return Promise.resolve();
     loadBusy = true;
     $('refreshBtn').disabled = true;
-    if (!data) $('tbody').innerHTML = '<tr><td colspan="7" class="empty" style="padding:12px">Chargement…</td></tr>';
+    $('refreshBtn').textContent = 'Actualisation…';
+    if (!data) $('tbody').innerHTML = '<tr><td colspan="6" class="empty-state">Chargement…</td></tr>';
     return api('list').then(function (r) {
       if (!r || r.error || !Array.isArray(r.printers)) throw new Error(r && r.error || 'Inventaire invalide');
       data = r;
+      updateServers();
       pingState = {};
       statusState = {};
       var errors = (r.errors || []).map(function (e) { return e.host + ' : ' + e.error; });
-      $('cfgState').textContent = r.printers.length + ' imprimantes' + (errors.length ? ' · Inventaire partiel : ' + errors.join(' · ') : '');
+      $('cfgState').textContent = errors.length ? 'Inventaire partiel : ' + errors.join(' · ') : 'Serveurs connectés';
       $('cfgState').className = errors.length ? 'pill bad' : 'pill ok';
+      $('lastUpdated').textContent = 'Inventaire à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' · actualisation 30 s';
       render();
       // Do not gate SNMP or model detection on ICMP. All workers are bounded;
       // wait for them before allowing the next refresh to overwrite their results.
-      return Promise.all([pingAll(), modelsAll(), statusAll(manual !== false), countsAll()]);
+      return Promise.all([pingAll(), modelsAll(), statusAll(manual !== false), countsAll()]).then(function () {
+        if (selectedPrinter && !purgeBusy) return refreshJobs();
+      });
     }).catch(function (e) {
       $('cfgState').textContent = 'Actualisation impossible : ' + e.message;
       $('cfgState').className = 'pill bad';
@@ -285,6 +429,7 @@
     }).then(function () {
       loadBusy = false;
       $('refreshBtn').disabled = false;
+      $('refreshBtn').textContent = 'Rafraîchir';
     });
   }
 
@@ -390,41 +535,15 @@
   }
 
   $('search').oninput = render;
+  $('serverFilter').onchange = render;
+  [].slice.call(document.querySelectorAll('.stat[data-filter]')).forEach(function (button) {
+    button.onclick = function () { activeFilter = button.getAttribute('data-filter'); render(); };
+  });
+  $('resetFilters').onclick = function () { activeFilter = 'all'; $('search').value = ''; $('serverFilter').value = ''; render(); };
   $('refreshBtn').onclick = function () { load(true); };
-  $('jobsRefresh').onclick = function () { if (selectedPrinter) openJobs(selectedPrinter.name, selectedPrinter.host); };
-  $('jobsClose').onclick = function () { $('jobsPanel').style.display = 'none'; selectedPrinter = null; render(); };
-  $('jobsPurge').onclick = function () {
-    if (!selectedPrinter) return;
-    if (!confirm('Vider TOUTE la file d\'attente de ' + selectedPrinter.name + ' ?\n\nLes jobs en cours seront supprimés sur le serveur d\'impression.')) return;
-    $('jobsPurge').disabled = true;
-    $('jobsPurge').textContent = 'Suppression…';
-    api('purge', { printer: selectedPrinter.name, host: selectedPrinter.host || '' }).then(function (r) {
-      $('jobsPurge').disabled = false;
-      $('jobsPurge').textContent = 'Vider la file';
-      if (r.error) { alert('Erreur: ' + r.error); return; }
-      var msg = r.deleted + ' job(s) supprimé(s)';
-      if (r.failed) {
-        msg += ', ' + r.failed + ' échec(s)';
-        if (r.errors && r.errors.length) {
-          msg += '\n\nPremière erreur: ' + (r.errors[0].error || JSON.stringify(r.errors[0]));
-          if (r.errors[0].path) msg += '\nPath: ' + r.errors[0].path;
-        }
-      } else if (r.deleted === 0 && r.matched > 0) {
-        msg += '\n\n' + r.matched + ' job(s) trouvés mais 0 supprimés.';
-        if (r.paths && r.paths.length) msg += '\nPath testé: ' + r.paths[0];
-      } else if (r.deleted === 0 && r.matched === 0) {
-        msg += '\n\nAucun job trouvé en WMI pour cette imprimante (alors qu\'ils sont dans la file côté serveur). Vérifie le format du nom.';
-      }
-      // Optimistic: the purge succeeded, force the badge to "vide" right away so
-      // the UI doesn't lie until the WMI re-count catches up. countsAll() then
-      // confirms from the server.
-      jobCountState[selectedPrinter.host + '|' + selectedPrinter.name] = 0;
-      render();
-      alert(msg);
-      openJobs(selectedPrinter.name, selectedPrinter.host);
-      countsAll();
-    });
-  };
+  $('jobsRefresh').onclick = refreshJobs;
+  $('jobsClose').onclick = closeJobs;
+  $('jobsPurge').onclick = purgeJobs;
   load(true);
   refreshTimer = setInterval(function () { load(false); }, 30000);
 </script>

@@ -42,7 +42,17 @@ Pour de la lecture seule, le compte n'a besoin que de `Read` (par défaut pour A
 - `?action=getStatus&ip=IP` — état SNMP avec indicateurs `available` et `errorsKnown` ; `force=1` ignore le cache.
 
 
-## États des imprimantes — version 0.0.29
+## Interface — version 0.0.30
+
+Les quatre compteurs filtrent le tableau : **Toutes les imprimantes**, **Prêtes**, **À surveiller** (alertes Windows ou SNMP, files suspendues ou en activité) et **État inconnu**. Une file Windows prête reste dans « Prêtes » si l’accès réseau direct n’est pas confirmé ; une alerte SNMP valide la fait passer dans « À surveiller ».
+
+La recherche porte sur le nom, le partage, l’adresse, le modèle, le pilote, l’emplacement et le serveur. Elle se combine avec le filtre par serveur et le compteur sélectionné. Les compteurs décrivent le parc du serveur sélectionné, indépendamment du texte recherché. **Effacer les filtres** rétablit la vue complète.
+
+Cliquer sur une imprimante ouvre son panneau de détails et ses travaux : document, utilisateur, état, pages, taille et date de soumission en heure du serveur. Le panneau s’affiche à droite sur grand écran et sous le tableau sur petit écran. Le tableau conserve un défilement horizontal quand nécessaire.
+
+**Actualiser la file** relit les travaux de l’imprimante sélectionnée. **Vider la file** demande confirmation en indiquant l’imprimante et le serveur ; la sélection reste verrouillée pendant cette opération. Les erreurs de lecture sont affichées explicitement. Après la purge, le module relit la file, y compris en cas de suppression partielle, pour conserver à l’écran les travaux restants. L’actualisation générale automatique reste à 30 secondes.
+
+## États des imprimantes
 
 La colonne Statut distingue les sources :
 
@@ -61,4 +71,4 @@ Références : [état Windows PRINTER_INFO_2](https://learn.microsoft.com/en-us/
 
 ## Tests
 
-Exécuter `node --test test/*.test.js` avec Node.js 18 ou ultérieur. Les tests simulent RPC, ICMP, TCP et SNMP sans contacter le parc réel. Ils couvrent le ping filtré, les connexions sans réponse, les états Windows combinés, les erreurs SNMP, les index autres que 1, le cache, l’affichage des sources et les actualisations concurrentes.
+Exécuter `node --test test/*.test.js` avec Node.js 18 ou ultérieur. Les 24 tests simulent RPC, ICMP, TCP, SNMP et les réponses des files sans contacter le parc réel. Ils couvrent le ping filtré, les connexions sans réponse, les états Windows combinés, les erreurs SNMP, les index autres que 1, le cache, l’affichage des sources, les actualisations concurrentes, les filtres et les compteurs, les changements de sélection, les erreurs de lecture et les purges partielles ou en échec.

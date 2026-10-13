@@ -1,7 +1,7 @@
 {
   "name": "printctl",
   "shortName": "printctl",
-  "version": "0.0.29",
+  "version": "0.0.30",
   "author": "V3locidad",
   "description": "Inventaire, état Windows des files, connectivité vérifiée et alertes SNMP validées, files d'attente, purge et auto-refresh. Inventaire via rpcclient, jobs/purge via WMI/impacket, modèle/statut via SNMP+PJL.",
   "hasAdminPanel": true,
